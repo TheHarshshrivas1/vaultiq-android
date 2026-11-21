@@ -17,17 +17,19 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
 
       - name: Install Android SDK Packages
         run: |
-          sdkmanager \
+          sdkmanager --install \
             "platforms;android-37" \
             "build-tools;36.0.0"
 
