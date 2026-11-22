@@ -6,6 +6,7 @@ import com.vaultiq.app.core.utils.MediaSource
 import com.vaultiq.app.core.utils.MediaSourceDetector
 import com.vaultiq.app.core.utils.MediaType
 import com.vaultiq.app.core.utils.MediaTypeDetection
+import com.vaultiq.app.core.utils.MediaTypeDetector
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -62,7 +63,6 @@ class DirectMediaInspector(
         }
 
         return withContext(Dispatchers.IO) {
-
             try {
                 val request = Request.Builder()
                     .url(url)
@@ -93,16 +93,15 @@ class DirectMediaInspector(
                         ?.toLongOrNull()
                         ?.takeIf { it >= 0L }
 
+                    val detectedMedia = MediaTypeDetector.detect(
+                        url = url,
+                        contentType = contentType
+                    )
+
                     val media = MediaTypeDetection(
-                        type = MediaTypeDetector.detect(
-                            url = url,
-                            contentType = contentType
-                        ).type,
+                        type = detectedMedia.type,
                         mimeType = contentType,
-                        extension = MediaTypeDetector.detect(
-                            url = url,
-                            contentType = contentType
-                        ).extension
+                        extension = detectedMedia.extension
                     )
 
                     val fileName = response.header("Content-Disposition")
@@ -134,7 +133,6 @@ class DirectMediaInspector(
 
                     VaultResult.Success(inspection)
                 }
-
             } catch (exception: Exception) {
                 VaultResult.Error(
                     message = exception.message
