@@ -12,6 +12,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.Response
 import java.util.concurrent.TimeUnit
 
 data class DirectMediaInspection(
@@ -38,24 +39,15 @@ class DirectMediaInspector(
         .build()
 ) {
 
-    suspend fun inspect(
-        url: String
-    ): VaultResult<DirectMediaInspection> {
-
+    suspend fun inspect(url: String): VaultResult<DirectMediaInspection> {
         val sourceResult = MediaSourceDetector.detect(url)
 
         val source = when (sourceResult) {
             is VaultResult.Success -> sourceResult.data.source
-
-            is VaultResult.Error -> {
-                return VaultResult.Error(sourceResult.message)
-            }
-
-            is VaultResult.Loading -> {
-                return VaultResult.Error(
-                    "Unable to validate the shared URL."
-                )
-            }
+            is VaultResult.Error -> return VaultResult.Error(sourceResult.message)
+            is VaultResult.Loading -> return VaultResult.Error(
+                "Unable to validate the shared URL."
+            )
         }
 
         if (source != MediaSource.DIRECT_WEB) {
@@ -66,82 +58,144 @@ class DirectMediaInspector(
 
         return withContext(Dispatchers.IO) {
             try {
-                val request = Request.Builder()
+                val headRequest = Request.Builder()
                     .url(url)
                     .head()
                     .header("User-Agent", "VAULTIQ-Android/1.0")
                     .build()
 
-                client.newCall(request).execute().use { response ->
+                val headResult = client.newCall(headRequest).execute().use { response ->
+                    when {
+                        response.code == 405 || response.code == 501 -> null
 
-                    if (response.code in 300..399) {
-                        return@withContext VaultResult.Error(
-                            "The link redirects to another address. Redirect inspection is not supported yet."
-                        )
-                    }
-
-                    if (!response.isSuccessful) {
-                        return@withContext VaultResult.Error(
-                            "Server returned HTTP ${response.code}."
-                        )
-                    }
-
-                    val contentType = response.header("Content-Type")
-                        ?.substringBefore(";")
-                        ?.trim()
-                        ?.takeIf { it.isNotBlank() }
-
-                    val contentLength = response.header("Content-Length")
-                        ?.toLongOrNull()
-                        ?.takeIf { it >= 0L }
-
-                    val detectedMedia = MediaTypeDetector.detect(
-                        url = url,
-                        contentType = contentType
-                    )
-
-                    val media = MediaTypeDetection(
-                        type = detectedMedia.type,
-                        mimeType = contentType,
-                        extension = detectedMedia.extension
-                    )
-
-                    val fileName = response.header("Content-Disposition")
-                        ?.let { header ->
-                            Regex(
-                                """filename\*?=(?:UTF-8''|")?([^";]+)""",
-                                RegexOption.IGNORE_CASE
+                        response.code in 300..399 -> {
+                            return@withContext VaultResult.Error(
+                                "The link redirects to another address. Redirect inspection is not supported yet."
                             )
-                                .find(header)
-                                ?.groupValues
-                                ?.getOrNull(1)
-                                ?.trim()
                         }
 
-                    val inspection = DirectMediaInspection(
-                        url = url,
-                        httpCode = response.code,
-                        contentType = contentType,
-                        contentLength = contentLength,
-                        media = media,
-                        fileName = fileName
-                    )
+                        !response.isSuccessful -> {
+                            return@withContext VaultResult.Error(
+                                "Server returned HTTP ${response.code}."
+                            )
+                        }
 
-                    if (!inspection.isMediaFile) {
-                        return@withContext VaultResult.Error(
-                            "The server did not confirm a supported media or document file."
-                        )
+                        else -> parseResponse(url, response)
                     }
-
-                    VaultResult.Success(inspection)
                 }
+
+                if (headResult != null) {
+                    return@withContext headResult
+                }
+
+                inspectWithRangeRequest(url)
+
             } catch (exception: Exception) {
                 VaultResult.Error(
-                    message = exception.message
-                        ?: "Unable to inspect this media link.",
-                    cause = exception
+                    exception.message ?: "Unable to inspect this media link.",
+                    exception
                 )
             }
+        }
+    }
+
+    private fun inspectWithRangeRequest(
+        url: String
+    ): VaultResult<DirectMediaInspection> {
+
+        val request = Request.Builder()
+            .url(url)
+            .get()
+            .header("Range", "bytes=0-0")
+            .header("User-Agent", "VAULTIQ-Android/1.0")
+            .build()
+
+        return client.newCall(request).execute().use { response ->
+
+            if (response.code in 300..399) {
+                return@use VaultResult.Error(
+                    "The link redirects to another address. Redirect inspection is not supported yet."
+                )
+            }
+
+            if (!response.isSuccessful) {
+                return@use VaultResult.Error(
+                    "Range inspection failed with HTTP ${response.code}."
+                )
+            }
+
+            if (response.code != 206 && response.code != 200) {
+                return@use VaultResult.Error(
+                    "The server does not support the required range inspection."
+                )
+            }
+
+            val totalLength = if (response.code == 206) {
+                response.header("Content-Range")
+                    ?.substringAfterLast("/")
+                    ?.toLongOrNull()
+                    ?.takeIf { it >= 0L }
+            } else {
+                null
+            }
+
+            parseResponse(
+                url = url,
+                response = response,
+                contentLengthOverride = totalLength
+            )
+        }
+    }
+
+    private fun parseResponse(
+        url: String,
+        response: Response,
+        contentLengthOverride: Long? = null
+    ): VaultResult<DirectMediaInspection> {
+
+        val contentType = response.header("Content-Type")
+            ?.substringBefore(";")
+            ?.trim()
+            ?.takeIf { it.isNotBlank() }
+
+        val contentLength = contentLengthOverride
+            ?: response.header("Content-Length")
+                ?.toLongOrNull()
+                ?.takeIf { it >= 0L }
+
+        val detectedMedia = MediaTypeDetector.detect(
+            url = url,
+            contentType = contentType
+        )
+
+        val media = MediaTypeDetection(
+            type = detectedMedia.type,
+            mimeType = contentType,
+            extension = detectedMedia.extension
+        )
+
+        val fileName = response.header("Content-Disposition")?.let { header ->
+            Regex(
+                """filename\*?=(?:UTF-8''|")?([^";]+)""",
+                RegexOption.IGNORE_CASE
+            ).find(header)?.groupValues?.getOrNull(1)?.trim()
+        }
+
+        val inspection = DirectMediaInspection(
+            url = url,
+            httpCode = response.code,
+            contentType = contentType,
+            contentLength = contentLength,
+            media = media,
+            fileName = fileName
+        )
+
+        return if (inspection.isMediaFile) {
+            VaultResult.Success(inspection)
+        } else {
+            VaultResult.Error(
+                "The server did not confirm a supported media or document file."
+            )
         }
     }
 }
