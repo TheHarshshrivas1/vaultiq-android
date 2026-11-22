@@ -8,9 +8,8 @@ import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
@@ -28,12 +27,13 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
         handleSharedIntent(intent)
 
         setContent {
             VaultIQTheme {
                 val navController = rememberNavController()
+                val sharedUrl by pendingSharedUrl
+                val shareError by sharedLinkError
 
                 val backStackEntry by
                     navController.currentBackStackEntryAsState()
@@ -63,7 +63,13 @@ class MainActivity : ComponentActivity() {
                 ) { innerPadding ->
                     VaultNavGraph(
                         navController = navController,
-                        modifier = Modifier.padding(innerPadding)
+                        modifier = Modifier.padding(innerPadding),
+                        sharedUrl = sharedUrl,
+                        shareError = shareError,
+                        onClearSharedContent = {
+                            pendingSharedUrl.value = null
+                            sharedLinkError.value = null
+                        }
                     )
                 }
             }
@@ -85,9 +91,11 @@ class MainActivity : ComponentActivity() {
             return
         }
 
-        val sharedText = intent.getStringExtra(Intent.EXTRA_TEXT)
-
-        when (val result = SharedUrlParser.extractUrl(sharedText)) {
+        when (
+            val result = SharedUrlParser.extractUrl(
+                intent.getStringExtra(Intent.EXTRA_TEXT)
+            )
+        ) {
             is VaultResult.Success -> {
                 pendingSharedUrl.value = result.data.toString()
                 sharedLinkError.value = null
@@ -100,7 +108,8 @@ class MainActivity : ComponentActivity() {
 
             is VaultResult.Loading -> {
                 pendingSharedUrl.value = null
-                sharedLinkError.value = "Please try sharing the link again."
+                sharedLinkError.value =
+                    "Please try sharing the link again."
             }
         }
     }
