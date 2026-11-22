@@ -108,12 +108,13 @@ fun DownloadScreen(
 
     val inspectUrl: suspend (String) -> Unit = { candidate ->
 
-        inspection = null
-        inspectionError = null
-        downloadMessage = null
+    inspection = null
+    inspectionError = null
+    downloadMessage = null
 
-        isInspecting = true
+    isInspecting = true
 
+    try {
         when (val result = inspector.inspect(candidate)) {
 
             is VaultResult.Success -> {
@@ -128,8 +129,14 @@ fun DownloadScreen(
                 inspectionError = "Inspection is still in progress."
             }
         }
-
+    } catch (exception: kotlinx.coroutines.CancellationException) {
+        throw exception
+    } catch (exception: Exception) {
+        inspectionError = exception.message
+            ?: "Unable to inspect this link."
+    } finally {
         isInspecting = false
+    }
     }
 
     LaunchedEffect(sharedUrl) {
