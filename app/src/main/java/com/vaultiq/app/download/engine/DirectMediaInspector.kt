@@ -7,6 +7,7 @@ import com.vaultiq.app.core.utils.MediaSourceDetector
 import com.vaultiq.app.core.utils.MediaType
 import com.vaultiq.app.core.utils.MediaTypeDetection
 import com.vaultiq.app.core.utils.MediaTypeDetector
+import com.vaultiq.app.core.utils.SafeDns
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -28,6 +29,7 @@ data class DirectMediaInspection(
 
 class DirectMediaInspector(
     private val client: OkHttpClient = OkHttpClient.Builder()
+        .dns(SafeDns)
         .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(10, TimeUnit.SECONDS)
         .callTimeout(15, TimeUnit.SECONDS)
