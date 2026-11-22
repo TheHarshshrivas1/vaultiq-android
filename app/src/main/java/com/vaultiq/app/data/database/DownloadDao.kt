@@ -1,3 +1,4 @@
+
 package com.vaultiq.app.data.database
 
 import androidx.room.Dao
@@ -15,7 +16,7 @@ interface DownloadDao {
     suspend fun insert(download: DownloadEntity): Long
 
     @Update
-    suspend fun update(download: DownloadEntity)
+    suspend fun update(download: DownloadEntity): Int
 
     @Delete
     suspend fun delete(download: DownloadEntity)
