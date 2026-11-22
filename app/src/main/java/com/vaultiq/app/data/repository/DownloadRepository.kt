@@ -1,3 +1,4 @@
+
 package com.vaultiq.app.data.repository
 
 import com.vaultiq.app.core.common.VaultResult
@@ -9,13 +10,11 @@ class DownloadRepository(
     private val downloadDao: DownloadDao
 ) {
 
-    fun observeAll(): Flow<List<DownloadEntity>> {
-        return downloadDao.observeAll()
-    }
+    fun observeAll(): Flow<List<DownloadEntity>> =
+        downloadDao.observeAll()
 
-    fun observeByStatus(status: String): Flow<List<DownloadEntity>> {
-        return downloadDao.observeByStatus(status)
-    }
+    fun observeByStatus(status: String): Flow<List<DownloadEntity>> =
+        downloadDao.observeByStatus(status)
 
     suspend fun getById(id: Long): VaultResult<DownloadEntity> {
         return try {
@@ -27,38 +26,31 @@ class DownloadRepository(
                 VaultResult.Error("Download record not found.")
             }
         } catch (exception: Exception) {
-            VaultResult.Error(
-                "Unable to load download record.",
-                exception
-            )
+            VaultResult.Error("Unable to load download record.", exception)
         }
     }
 
     suspend fun add(download: DownloadEntity): VaultResult<Long> {
         return try {
-            val id = downloadDao.insert(download)
-            VaultResult.Success(id)
+            VaultResult.Success(downloadDao.insert(download))
         } catch (exception: Exception) {
-            VaultResult.Error(
-                "Unable to save download.",
-                exception
-            )
+            VaultResult.Error("Unable to save download.", exception)
         }
     }
 
-    suspend fun update(
-        download: DownloadEntity
-    ): VaultResult<Unit> {
+    suspend fun update(download: DownloadEntity): VaultResult<Unit> {
         return try {
-            downloadDao.update(
+            val updatedRows = downloadDao.update(
                 download.copy(updatedAt = System.currentTimeMillis())
             )
-            VaultResult.Success(Unit)
+
+            if (updatedRows > 0) {
+                VaultResult.Success(Unit)
+            } else {
+                VaultResult.Error("Download record no longer exists.")
+            }
         } catch (exception: Exception) {
-            VaultResult.Error(
-                "Unable to update download.",
-                exception
-            )
+            VaultResult.Error("Unable to update download.", exception)
         }
     }
 
@@ -67,10 +59,7 @@ class DownloadRepository(
             downloadDao.deleteById(id)
             VaultResult.Success(Unit)
         } catch (exception: Exception) {
-            VaultResult.Error(
-                "Unable to delete download.",
-                exception
-            )
+            VaultResult.Error("Unable to delete download.", exception)
         }
     }
 
@@ -79,10 +68,7 @@ class DownloadRepository(
             downloadDao.deleteAll()
             VaultResult.Success(Unit)
         } catch (exception: Exception) {
-            VaultResult.Error(
-                "Unable to clear download history.",
-                exception
-            )
+            VaultResult.Error("Unable to clear download history.", exception)
         }
     }
 
@@ -90,25 +76,15 @@ class DownloadRepository(
         return try {
             VaultResult.Success(downloadDao.getCount())
         } catch (exception: Exception) {
-            VaultResult.Error(
-                "Unable to get download count.",
-                exception
-            )
+            VaultResult.Error("Unable to get download count.", exception)
         }
     }
 
-    suspend fun getCountByStatus(
-        status: String
-    ): VaultResult<Int> {
+    suspend fun getCountByStatus(status: String): VaultResult<Int> {
         return try {
-            VaultResult.Success(
-                downloadDao.getCountByStatus(status)
-            )
+            VaultResult.Success(downloadDao.getCountByStatus(status))
         } catch (exception: Exception) {
-            VaultResult.Error(
-                "Unable to get download status count.",
-                exception
-            )
+            VaultResult.Error("Unable to get download status count.", exception)
         }
     }
 }
