@@ -96,6 +96,9 @@ class DownloadEngine(
                     }
 
                     val body = it.body
+                        ?: return@withContext VaultResult.Error(
+                            "Server returned an empty response body."
+                        )
 
                     val mimeType = body.contentType()
                         ?.toString()
