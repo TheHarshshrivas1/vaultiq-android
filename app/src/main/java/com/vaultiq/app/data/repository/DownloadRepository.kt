@@ -4,6 +4,7 @@ package com.vaultiq.app.data.repository
 import com.vaultiq.app.core.common.VaultResult
 import com.vaultiq.app.data.database.DownloadDao
 import com.vaultiq.app.data.database.DownloadEntity
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 
 class DownloadRepository(
@@ -25,6 +26,8 @@ class DownloadRepository(
             } else {
                 VaultResult.Error("Download record not found.")
             }
+        } catch (exception: CancellationException) {
+            throw exception
         } catch (exception: Exception) {
             VaultResult.Error("Unable to load download record.", exception)
         }
@@ -33,6 +36,8 @@ class DownloadRepository(
     suspend fun add(download: DownloadEntity): VaultResult<Long> {
         return try {
             VaultResult.Success(downloadDao.insert(download))
+        } catch (exception: CancellationException) {
+            throw exception
         } catch (exception: Exception) {
             VaultResult.Error("Unable to save download.", exception)
         }
@@ -49,6 +54,8 @@ class DownloadRepository(
             } else {
                 VaultResult.Error("Download record no longer exists.")
             }
+        } catch (exception: CancellationException) {
+            throw exception
         } catch (exception: Exception) {
             VaultResult.Error("Unable to update download.", exception)
         }
@@ -58,6 +65,8 @@ class DownloadRepository(
         return try {
             downloadDao.deleteById(id)
             VaultResult.Success(Unit)
+        } catch (exception: CancellationException) {
+            throw exception
         } catch (exception: Exception) {
             VaultResult.Error("Unable to delete download.", exception)
         }
@@ -67,6 +76,8 @@ class DownloadRepository(
         return try {
             downloadDao.deleteAll()
             VaultResult.Success(Unit)
+        } catch (exception: CancellationException) {
+            throw exception
         } catch (exception: Exception) {
             VaultResult.Error("Unable to clear download history.", exception)
         }
@@ -75,6 +86,8 @@ class DownloadRepository(
     suspend fun getCount(): VaultResult<Int> {
         return try {
             VaultResult.Success(downloadDao.getCount())
+        } catch (exception: CancellationException) {
+            throw exception
         } catch (exception: Exception) {
             VaultResult.Error("Unable to get download count.", exception)
         }
@@ -83,6 +96,8 @@ class DownloadRepository(
     suspend fun getCountByStatus(status: String): VaultResult<Int> {
         return try {
             VaultResult.Success(downloadDao.getCountByStatus(status))
+        } catch (exception: CancellationException) {
+            throw exception
         } catch (exception: Exception) {
             VaultResult.Error("Unable to get download status count.", exception)
         }
