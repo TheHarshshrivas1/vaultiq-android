@@ -9,6 +9,7 @@ import com.vaultiq.app.data.database.DownloadEntity
 import com.vaultiq.app.data.database.VaultDatabase
 import com.vaultiq.app.data.repository.DownloadRepository
 import com.vaultiq.app.download.DownloadStatus
+import kotlinx.coroutines.CancellationException
 
 class DownloadRequestManager(context: Context) {
 
@@ -37,7 +38,6 @@ class DownloadRequestManager(context: Context) {
             ?: "download"
 
         return try {
-
             val record = DownloadEntity(
                 url = validatedUrl,
                 fileName = initialFileName,
@@ -67,9 +67,7 @@ class DownloadRequestManager(context: Context) {
                 }
 
                 is VaultResult.Error -> {
-
-                    val cleanupResult =
-                        repository.delete(downloadId)
+                    val cleanupResult = repository.delete(downloadId)
 
                     if (cleanupResult !is VaultResult.Success) {
                         VaultResult.Error(
@@ -86,13 +84,14 @@ class DownloadRequestManager(context: Context) {
 
                 is VaultResult.Loading -> {
                     repository.delete(downloadId)
-
                     VaultResult.Error(
                         "Download could not be added to the queue."
                     )
                 }
             }
 
+        } catch (exception: CancellationException) {
+            throw exception
         } catch (exception: Exception) {
             VaultResult.Error(
                 "Unable to submit download request.",
