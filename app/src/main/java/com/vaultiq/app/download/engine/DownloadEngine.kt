@@ -3,6 +3,7 @@ package com.vaultiq.app.download.engine
 
 import android.net.Uri
 import com.vaultiq.app.core.common.VaultResult
+import com.vaultiq.app.core.utils.SafeDns
 import com.vaultiq.app.core.utils.UrlValidator
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -39,6 +40,7 @@ data class DownloadSummary(
 
 class DownloadEngine(
     private val client: OkHttpClient = OkHttpClient.Builder()
+        .dns(SafeDns)
         .connectTimeout(30, TimeUnit.SECONDS)
         .readTimeout(60, TimeUnit.SECONDS)
         .writeTimeout(30, TimeUnit.SECONDS)
