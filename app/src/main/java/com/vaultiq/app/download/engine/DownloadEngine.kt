@@ -52,6 +52,9 @@ class DownloadEngine(
             String,
             String?
         ) -> VaultResult<DownloadOutput>,
+        cleanupDestination: (
+            Uri
+        ) -> VaultResult<Unit>,
         onProgress: (DownloadProgress) -> Unit = {}
     ): VaultResult<DownloadSummary> {
 
@@ -128,7 +131,11 @@ class DownloadEngine(
 
                     val output = when (destinationResult) {
                         is VaultResult.Success -> destinationResult.data
-                        is VaultResult.Error -> return@withContext destinationResult
+
+                        is VaultResult.Error -> {
+                            return@withContext destinationResult
+                        }
+
                         is VaultResult.Loading -> {
                             return@withContext VaultResult.Error(
                                 "Download destination is unavailable."
@@ -179,6 +186,12 @@ class DownloadEngine(
                         )
                     }
 
+                    if (downloadedBytes <= 0L) {
+                        return@withContext VaultResult.Error(
+                            "The downloaded file is empty."
+                        )
+                    }
+
                     completed = true
 
                     VaultResult.Success(
@@ -186,7 +199,11 @@ class DownloadEngine(
                             fileName = output.fileName,
                             mimeType = mimeType,
                             bytesDownloaded = downloadedBytes,
-                            totalBytes = downloadedBytes,
+                            totalBytes = if (totalBytes > 0) {
+                                totalBytes
+                            } else {
+                                downloadedBytes
+                            },
                             destinationUri = output.uri
                         )
                     )
@@ -198,23 +215,24 @@ class DownloadEngine(
 
             } catch (exception: Exception) {
                 VaultResult.Error(
-                    message = exception.message ?: "Download failed.",
+                    message = exception.message
+                        ?: "Download failed.",
                     cause = exception
                 )
 
             } finally {
                 cancellationHandle?.dispose()
 
-                if (!completed && createdOutput != null) {
-                    runCatching {
-                        createdOutput!!.outputStream.close()
-                    }
+                if (!completed) {
+                    createdOutput?.let { output ->
 
-                    runCatching {
-                        DownloadDestinationManagerCleanup.delete(
-                            createdOutput!!.uri,
-                            destinationFactory
-                        )
+                        runCatching {
+                            output.outputStream.close()
+                        }
+
+                        runCatching {
+                            cleanupDestination(output.uri)
+                        }
                     }
                 }
             }
