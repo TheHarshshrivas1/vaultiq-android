@@ -27,28 +27,40 @@ class DownloadProgressObserver(context: Context) {
                 DownloadQueue.uniqueWorkName(downloadId)
             )
             .map { workInfos ->
-
-                val workInfo = workInfos.firstOrNull()
-                    ?: return@map null
-
-                val progress = workInfo.progress
-
-                DownloadProgressInfo(
-                    downloadId = downloadId,
-                    state = workInfo.state,
-                    downloadedBytes = progress.getLong(
-                        "downloaded_bytes",
-                        0L
-                    ),
-                    totalBytes = progress.getLong(
-                        "total_bytes",
-                        0L
-                    ),
-                    percentage = progress.getInt(
-                        "progress_percent",
-                        -1
-                    )
-                )
+                workInfos.firstOrNull()?.let { toProgressInfo(it) }
             }
+    }
+
+    fun observeAll(): Flow<List<DownloadProgressInfo>> {
+        return workManager
+            .getWorkInfosByTagFlow("vaultiq_download")
+            .map { workInfos ->
+                workInfos.mapNotNull { workInfo ->
+                    toProgressInfo(workInfo)
+                }
+            }
+    }
+
+    private fun toProgressInfo(
+        workInfo: WorkInfo
+    ): DownloadProgressInfo? {
+        val progress = workInfo.progress
+        val downloadId = progress.getLong("download_id", -1L)
+
+        if (downloadId <= 0L) return null
+
+        return DownloadProgressInfo(
+            downloadId = downloadId,
+            state = workInfo.state,
+            downloadedBytes = progress.getLong(
+                "downloaded_bytes", 0L
+            ),
+            totalBytes = progress.getLong(
+                "total_bytes", 0L
+            ),
+            percentage = progress.getInt(
+                "progress_percent", -1
+            )
+        )
     }
 }
