@@ -23,6 +23,7 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -43,6 +44,7 @@ import com.vaultiq.app.ui.theme.VaultNavy
 import com.vaultiq.app.ui.theme.VaultPanel
 import com.vaultiq.app.ui.theme.VaultSilver
 import com.vaultiq.app.ui.theme.VaultWhite
+import java.net.URI
 
 private val downloadTabs = listOf(
     "Search",
@@ -52,13 +54,24 @@ private val downloadTabs = listOf(
 )
 
 @Composable
-fun DownloadScreen() {
+fun DownloadScreen(
+    sharedUrl: String? = null,
+    shareError: String? = null,
+    onClearSharedContent: () -> Unit = {}
+) {
     var selectedTab by rememberSaveable {
         mutableStateOf("Search")
     }
 
     var mediaUrl by rememberSaveable {
         mutableStateOf("")
+    }
+
+    LaunchedEffect(sharedUrl, shareError) {
+        if (sharedUrl != null) {
+            mediaUrl = sharedUrl
+            selectedTab = "Search"
+        }
     }
 
     Column(
@@ -88,7 +101,10 @@ fun DownloadScreen() {
         when (selectedTab) {
             "Search" -> SearchContent(
                 mediaUrl = mediaUrl,
-                onUrlChange = { mediaUrl = it }
+                onUrlChange = { mediaUrl = it },
+                sharedUrl = sharedUrl,
+                shareError = shareError,
+                onClearSharedContent = onClearSharedContent
             )
 
             "YouTube" -> SourceContent(
@@ -189,7 +205,10 @@ private fun DownloadTab(
 @Composable
 private fun SearchContent(
     mediaUrl: String,
-    onUrlChange: (String) -> Unit
+    onUrlChange: (String) -> Unit,
+    sharedUrl: String?,
+    shareError: String?,
+    onClearSharedContent: () -> Unit
 ) {
     Column(
         modifier = Modifier
@@ -198,7 +217,7 @@ private fun SearchContent(
             .padding(horizontal = 20.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Spacer(modifier = Modifier.height(58.dp))
+        Spacer(modifier = Modifier.height(42.dp))
 
         Text(
             text = "YOUR MEDIA.",
@@ -256,25 +275,77 @@ private fun SearchContent(
             fontSize = 11.sp
         )
 
+        if (sharedUrl != null) {
+            Spacer(modifier = Modifier.height(22.dp))
+
+            SmartPreviewCard(
+                url = sharedUrl,
+                onClose = onClearSharedContent
+            )
+        }
+
+        if (shareError != null) {
+            Spacer(modifier = Modifier.height(16.dp))
+
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                color = VaultPanel,
+                shape = RoundedCornerShape(18.dp)
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp)
+                ) {
+                    Text(
+                        text = "SHARED LINK NOT ACCEPTED",
+                        color = VaultGold,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    Text(
+                        text = shareError,
+                        color = VaultSilver,
+                        fontSize = 12.sp
+                    )
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    Text(
+                        text = "DISMISS",
+                        color = VaultGold,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.clickable {
+                            onClearSharedContent()
+                        }
+                    )
+                }
+            }
+        }
+
         Spacer(modifier = Modifier.height(26.dp))
 
-        VaultPill(text = "SMART PREVIEW")
+        if (sharedUrl == null) {
+            VaultPill(text = "SMART PREVIEW")
 
-        Spacer(modifier = Modifier.height(14.dp))
+            Spacer(modifier = Modifier.height(14.dp))
 
-        VaultInfoCard(
-            title = "Preview before download",
-            description = "Review supported media details and available options before saving.",
-            symbol = "◉"
-        )
+            VaultInfoCard(
+                title = "Preview before download",
+                description = "Review supported media details and available options before saving.",
+                symbol = "◉"
+            )
 
-        Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(12.dp))
 
-        VaultInfoCard(
-            title = "Personal media library",
-            description = "Keep your saved videos, music, images and files organized.",
-            symbol = "▣"
-        )
+            VaultInfoCard(
+                title = "Personal media library",
+                description = "Keep your saved videos, music, images and files organized.",
+                symbol = "▣"
+            )
+        }
 
         Spacer(modifier = Modifier.height(24.dp))
 
@@ -284,6 +355,108 @@ private fun SearchContent(
         )
 
         Spacer(modifier = Modifier.height(20.dp))
+    }
+}
+
+@Composable
+private fun SmartPreviewCard(
+    url: String,
+    onClose: () -> Unit
+) {
+    val source = runCatching {
+        URI(url).host?.removePrefix("www.") ?: "Unknown source"
+    }.getOrDefault("Unknown source")
+
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = VaultPanel,
+        shape = RoundedCornerShape(22.dp)
+    ) {
+        Column(
+            modifier = Modifier.padding(18.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "SMART PREVIEW",
+                    color = VaultGold,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 1.sp
+                )
+
+                Text(
+                    text = "LINK RECEIVED",
+                    color = VaultSilver,
+                    fontSize = 9.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+
+            Spacer(modifier = Modifier.height(18.dp))
+
+            Text(
+                text = "Source",
+                color = VaultMuted,
+                fontSize = 11.sp
+            )
+
+            Spacer(modifier = Modifier.height(4.dp))
+
+            Text(
+                text = source,
+                color = VaultWhite,
+                fontSize = 17.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+
+            Spacer(modifier = Modifier.height(14.dp))
+
+            Text(
+                text = "Shared URL",
+                color = VaultMuted,
+                fontSize = 11.sp
+            )
+
+            Spacer(modifier = Modifier.height(6.dp))
+
+            Text(
+                text = url,
+                color = VaultSilver,
+                fontSize = 11.sp,
+                lineHeight = 17.sp
+            )
+
+            Spacer(modifier = Modifier.height(18.dp))
+
+            Surface(
+                color = VaultNavy,
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Text(
+                    text = "Download availability and media options have not been checked yet.",
+                    color = VaultSilver,
+                    fontSize = 11.sp,
+                    lineHeight = 17.sp,
+                    modifier = Modifier.padding(12.dp)
+                )
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            Text(
+                text = "CLOSE PREVIEW",
+                color = VaultGold,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier
+                    .clickable(onClick = onClose)
+                    .padding(vertical = 8.dp)
+            )
+        }
     }
 }
 
