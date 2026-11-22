@@ -12,7 +12,13 @@ import androidx.work.WorkManager
 import com.vaultiq.app.core.common.VaultResult
 import com.vaultiq.app.core.utils.UrlValidator
 import com.vaultiq.app.download.worker.DownloadWorker
+import java.util.concurrent.Executor
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.ExecutionException
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 
 object DownloadQueue {
 
@@ -22,7 +28,11 @@ object DownloadQueue {
     private const val WORK_PREFIX = "vaultiq_download_"
     private const val WORK_TAG = "vaultiq_download"
 
-    fun enqueue(
+    private val directExecutor = Executor { command ->
+        command.run()
+    }
+
+    suspend fun enqueue(
         context: Context,
         downloadId: Long,
         url: String
@@ -61,19 +71,57 @@ object DownloadQueue {
                     .addTag("$WORK_TAG:$downloadId")
                     .build()
 
-            WorkManager.getInstance(context.applicationContext)
+            val operation = WorkManager
+                .getInstance(context.applicationContext)
                 .enqueueUniqueWork(
                     uniqueWorkName(downloadId),
                     ExistingWorkPolicy.KEEP,
                     request
                 )
 
+            awaitOperation(operation)
+
             VaultResult.Success(Unit)
 
+        } catch (exception: CancellationException) {
+            throw exception
         } catch (exception: Exception) {
             VaultResult.Error(
                 "Unable to add download to queue.",
                 exception
+            )
+        }
+    }
+
+    private suspend fun awaitOperation(
+        operation: Operation
+    ) {
+        suspendCancellableCoroutine<Unit> { continuation ->
+
+            operation.result.addListener(
+                {
+                    try {
+                        operation.result.get()
+                        if (continuation.isActive) {
+                            continuation.resume(Unit)
+                        }
+                    } catch (exception: ExecutionException) {
+                        if (continuation.isActive) {
+                            continuation.resumeWithException(
+                                exception.cause ?: exception
+                            )
+                        }
+                    } catch (exception: Exception) {
+                        if (exception is InterruptedException) {
+                            Thread.currentThread().interrupt()
+                        }
+
+                        if (continuation.isActive) {
+                            continuation.resumeWithException(exception)
+                        }
+                    }
+                },
+                directExecutor
             )
         }
     }
