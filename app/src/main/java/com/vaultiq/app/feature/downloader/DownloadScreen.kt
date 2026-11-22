@@ -18,6 +18,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
@@ -26,14 +29,23 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.vaultiq.app.core.common.VaultResult
+import com.vaultiq.app.core.utils.MediaSourceDetector
+import com.vaultiq.app.core.utils.MediaType
+import com.vaultiq.app.download.engine.DirectMediaInspection
+import com.vaultiq.app.download.engine.DirectMediaInspector
+import com.vaultiq.app.download.queue.DownloadRequestManager
 import com.vaultiq.app.ui.designsystem.VaultInfoCard
 import com.vaultiq.app.ui.designsystem.VaultPill
 import com.vaultiq.app.ui.designsystem.VaultSectionTitle
@@ -44,7 +56,7 @@ import com.vaultiq.app.ui.theme.VaultNavy
 import com.vaultiq.app.ui.theme.VaultPanel
 import com.vaultiq.app.ui.theme.VaultSilver
 import com.vaultiq.app.ui.theme.VaultWhite
-import java.net.URI
+import kotlinx.coroutines.launch
 
 private val downloadTabs = listOf(
     "Search",
@@ -67,10 +79,68 @@ fun DownloadScreen(
         mutableStateOf("")
     }
 
-    LaunchedEffect(sharedUrl, shareError) {
+    var inspection by remember {
+        mutableStateOf<DirectMediaInspection?>(null)
+    }
+
+    var inspectionError by remember {
+        mutableStateOf<String?>(null)
+    }
+
+    var isInspecting by remember {
+        mutableStateOf(false)
+    }
+
+    var isSubmitting by remember {
+        mutableStateOf(false)
+    }
+
+    var downloadMessage by remember {
+        mutableStateOf<String?>(null)
+    }
+
+    val inspector = remember {
+        DirectMediaInspector()
+    }
+
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+
+    val inspectUrl: suspend (String) -> Unit = { candidate ->
+
+        inspection = null
+        inspectionError = null
+        downloadMessage = null
+
+        isInspecting = true
+
+        when (val result = inspector.inspect(candidate)) {
+
+            is VaultResult.Success -> {
+                inspection = result.data
+            }
+
+            is VaultResult.Error -> {
+                inspectionError = result.message
+            }
+
+            is VaultResult.Loading -> {
+                inspectionError = "Inspection is still in progress."
+            }
+        }
+
+        isInspecting = false
+    }
+
+    LaunchedEffect(sharedUrl) {
         if (sharedUrl != null) {
             mediaUrl = sharedUrl
             selectedTab = "Search"
+            inspectUrl(sharedUrl)
+        } else {
+            inspection = null
+            inspectionError = null
+            downloadMessage = null
         }
     }
 
@@ -101,9 +171,55 @@ fun DownloadScreen(
         when (selectedTab) {
             "Search" -> SearchContent(
                 mediaUrl = mediaUrl,
-                onUrlChange = { mediaUrl = it },
+                onUrlChange = {
+                    mediaUrl = it
+                    inspection = null
+                    inspectionError = null
+                    downloadMessage = null
+                },
                 sharedUrl = sharedUrl,
                 shareError = shareError,
+                inspection = inspection,
+                inspectionError = inspectionError,
+                isInspecting = isInspecting,
+                isSubmitting = isSubmitting,
+                downloadMessage = downloadMessage,
+                onInspect = {
+                    scope.launch {
+                        inspectUrl(mediaUrl)
+                    }
+                },
+                onDownload = {
+                    val readyUrl = inspection?.url
+
+                    if (readyUrl != null && !isSubmitting) {
+                        scope.launch {
+                            isSubmitting = true
+                            downloadMessage = null
+
+                            when (
+                                val result = DownloadRequestManager(context)
+                                    .submit(readyUrl)
+                            ) {
+                                is VaultResult.Success -> {
+                                    downloadMessage =
+                                        "Added to download queue. ID: ${result.data}"
+                                }
+
+                                is VaultResult.Error -> {
+                                    downloadMessage = result.message
+                                }
+
+                                is VaultResult.Loading -> {
+                                    downloadMessage =
+                                        "Please try adding the download again."
+                                }
+                            }
+
+                            isSubmitting = false
+                        }
+                    }
+                },
                 onClearSharedContent = onClearSharedContent
             )
 
@@ -208,6 +324,13 @@ private fun SearchContent(
     onUrlChange: (String) -> Unit,
     sharedUrl: String?,
     shareError: String?,
+    inspection: DirectMediaInspection?,
+    inspectionError: String?,
+    isInspecting: Boolean,
+    isSubmitting: Boolean,
+    downloadMessage: String?,
+    onInspect: () -> Unit,
+    onDownload: () -> Unit,
     onClearSharedContent: () -> Unit
 ) {
     Column(
@@ -217,7 +340,7 @@ private fun SearchContent(
             .padding(horizontal = 20.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Spacer(modifier = Modifier.height(42.dp))
+        Spacer(modifier = Modifier.height(36.dp))
 
         Text(
             text = "YOUR MEDIA.",
@@ -269,6 +392,36 @@ private fun SearchContent(
 
         Spacer(modifier = Modifier.height(12.dp))
 
+        Button(
+            onClick = onInspect,
+            enabled = mediaUrl.isNotBlank() && !isInspecting,
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = VaultGold,
+                contentColor = VaultNavy,
+                disabledContainerColor = VaultBorder,
+                disabledContentColor = VaultMuted
+            )
+        ) {
+            if (isInspecting) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(18.dp),
+                    color = VaultNavy,
+                    strokeWidth = 2.dp
+                )
+                Spacer(modifier = Modifier.width(10.dp))
+                Text("CHECKING LINK")
+            } else {
+                Text(
+                    text = "CHECK LINK",
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
         Text(
             text = "Paste a link or share content from another app to VAULTIQ.",
             color = VaultMuted,
@@ -276,65 +429,82 @@ private fun SearchContent(
         )
 
         if (sharedUrl != null) {
-            Spacer(modifier = Modifier.height(22.dp))
+            Spacer(modifier = Modifier.height(12.dp))
 
-            SmartPreviewCard(
-                url = sharedUrl,
-                onClose = onClearSharedContent
+            Text(
+                text = "LINK RECEIVED FROM ANOTHER APP",
+                color = VaultGold,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Bold
+            )
+
+            Text(
+                text = "You can close this preview without affecting the original app.",
+                color = VaultMuted,
+                fontSize = 10.sp,
+                modifier = Modifier
+                    .clickable(onClick = onClearSharedContent)
+                    .padding(8.dp)
             )
         }
 
         if (shareError != null) {
             Spacer(modifier = Modifier.height(16.dp))
 
-            Surface(
-                modifier = Modifier.fillMaxWidth(),
-                color = VaultPanel,
-                shape = RoundedCornerShape(18.dp)
-            ) {
-                Column(
-                    modifier = Modifier.padding(16.dp)
-                ) {
-                    Text(
-                        text = "SHARED LINK NOT ACCEPTED",
-                        color = VaultGold,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold
-                    )
+            MessageCard(
+                title = "SHARED LINK NOT ACCEPTED",
+                message = shareError
+            )
+        }
 
-                    Spacer(modifier = Modifier.height(8.dp))
+        if (isInspecting) {
+            Spacer(modifier = Modifier.height(22.dp))
 
-                    Text(
-                        text = shareError,
-                        color = VaultSilver,
-                        fontSize = 12.sp
-                    )
+            CircularProgressIndicator(
+                color = VaultGold,
+                modifier = Modifier.size(32.dp)
+            )
 
-                    Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(10.dp))
 
-                    Text(
-                        text = "DISMISS",
-                        color = VaultGold,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.clickable {
-                            onClearSharedContent()
-                        }
-                    )
-                }
-            }
+            Text(
+                text = "INSPECTING MEDIA LINK...",
+                color = VaultSilver,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold
+            )
+        }
+
+        if (inspection != null) {
+            Spacer(modifier = Modifier.height(22.dp))
+
+            SmartPreviewCard(
+                inspection = inspection,
+                onDownload = onDownload,
+                isSubmitting = isSubmitting,
+                downloadMessage = downloadMessage
+            )
+        }
+
+        if (inspectionError != null) {
+            Spacer(modifier = Modifier.height(18.dp))
+
+            MessageCard(
+                title = "PREVIEW UNAVAILABLE",
+                message = inspectionError
+            )
         }
 
         Spacer(modifier = Modifier.height(26.dp))
 
-        if (sharedUrl == null) {
+        if (sharedUrl == null && inspection == null) {
             VaultPill(text = "SMART PREVIEW")
 
             Spacer(modifier = Modifier.height(14.dp))
 
             VaultInfoCard(
                 title = "Preview before download",
-                description = "Review supported media details and available options before saving.",
+                description = "Check supported media details and available options before saving.",
                 symbol = "◉"
             )
 
@@ -360,12 +530,17 @@ private fun SearchContent(
 
 @Composable
 private fun SmartPreviewCard(
-    url: String,
-    onClose: () -> Unit
+    inspection: DirectMediaInspection,
+    onDownload: () -> Unit,
+    isSubmitting: Boolean,
+    downloadMessage: String?
 ) {
-    val source = runCatching {
-        URI(url).host?.removePrefix("www.") ?: "Unknown source"
-    }.getOrDefault("Unknown source")
+    val source = when (
+        val result = MediaSourceDetector.detect(inspection.url)
+    ) {
+        is VaultResult.Success -> result.data.source.displayName
+        else -> "Direct Web Link"
+    }
 
     Surface(
         modifier = Modifier.fillMaxWidth(),
@@ -389,8 +564,8 @@ private fun SmartPreviewCard(
                 )
 
                 Text(
-                    text = "LINK RECEIVED",
-                    color = VaultSilver,
+                    text = "INSPECTED",
+                    color = VaultGold,
                     fontSize = 9.sp,
                     fontWeight = FontWeight.Bold
                 )
@@ -398,66 +573,198 @@ private fun SmartPreviewCard(
 
             Spacer(modifier = Modifier.height(18.dp))
 
-            Text(
-                text = "Source",
-                color = VaultMuted,
-                fontSize = 11.sp
+            PreviewDetail("SOURCE", source)
+            PreviewDetail(
+                "MEDIA TYPE",
+                inspection.media.type.displayName
             )
-
-            Spacer(modifier = Modifier.height(4.dp))
-
-            Text(
-                text = source,
-                color = VaultWhite,
-                fontSize = 17.sp,
-                fontWeight = FontWeight.SemiBold
+            PreviewDetail(
+                "FORMAT",
+                inspection.media.extension
+                    ?.uppercase()
+                    ?: inspection.contentType
+                    ?: "Unknown"
             )
-
-            Spacer(modifier = Modifier.height(14.dp))
-
-            Text(
-                text = "Shared URL",
-                color = VaultMuted,
-                fontSize = 11.sp
+            PreviewDetail(
+                "MIME TYPE",
+                inspection.contentType ?: "Not provided"
             )
-
-            Spacer(modifier = Modifier.height(6.dp))
-
-            Text(
-                text = url,
-                color = VaultSilver,
-                fontSize = 11.sp,
-                lineHeight = 17.sp
+            PreviewDetail(
+                "FILE SIZE",
+                inspection.contentLength?.let { formatBytes(it) }
+                    ?: "Not provided by server"
             )
-
-            Spacer(modifier = Modifier.height(18.dp))
-
-            Surface(
-                color = VaultNavy,
-                shape = RoundedCornerShape(12.dp)
-            ) {
-                Text(
-                    text = "Download availability and media options have not been checked yet.",
-                    color = VaultSilver,
-                    fontSize = 11.sp,
-                    lineHeight = 17.sp,
-                    modifier = Modifier.padding(12.dp)
-                )
-            }
+            PreviewDetail(
+                "HTTP STATUS",
+                inspection.httpCode.toString()
+            )
 
             Spacer(modifier = Modifier.height(16.dp))
 
             Text(
-                text = "CLOSE PREVIEW",
+                text = "AVAILABLE FORMAT",
                 color = VaultGold,
                 fontSize = 11.sp,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier
-                    .clickable(onClick = onClose)
-                    .padding(vertical = 8.dp)
+                fontWeight = FontWeight.Bold
+            )
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                color = VaultNavy,
+                shape = RoundedCornerShape(14.dp)
+            ) {
+                Column(
+                    modifier = Modifier.padding(14.dp)
+                ) {
+                    Text(
+                        text = inspection.media.type.displayName,
+                        color = VaultWhite,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+
+                    Text(
+                        text = inspection.media.extension
+                            ?.uppercase()
+                            ?: "Server-provided format",
+                        color = VaultMuted,
+                        fontSize = 11.sp
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Text(
+                text = "Only the format confirmed by the server is shown. Multiple quality options require a source that provides multiple formats.",
+                color = VaultMuted,
+                fontSize = 10.sp,
+                lineHeight = 15.sp
+            )
+
+            Spacer(modifier = Modifier.height(18.dp))
+
+            Button(
+                onClick = onDownload,
+                enabled = !isSubmitting && inspection.isMediaFile,
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(15.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = VaultGold,
+                    contentColor = VaultNavy
+                )
+            ) {
+                if (isSubmitting) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(18.dp),
+                        color = VaultNavy,
+                        strokeWidth = 2.dp
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Text("ADDING...")
+                } else {
+                    Text(
+                        text = "ADD TO DOWNLOADS",
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+
+            if (downloadMessage != null) {
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Text(
+                    text = downloadMessage,
+                    color = VaultSilver,
+                    fontSize = 11.sp,
+                    lineHeight = 16.sp
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun PreviewDetail(
+    label: String,
+    value: String
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(bottom = 12.dp)
+    ) {
+        Text(
+            text = label,
+            color = VaultMuted,
+            fontSize = 9.sp,
+            fontWeight = FontWeight.Bold,
+            letterSpacing = 1.sp
+        )
+
+        Spacer(modifier = Modifier.height(4.dp))
+
+        Text(
+            text = value,
+            color = VaultWhite,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Medium
+        )
+    }
+}
+
+@Composable
+private fun MessageCard(
+    title: String,
+    message: String
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = VaultPanel,
+        shape = RoundedCornerShape(18.dp)
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp)
+        ) {
+            Text(
+                text = title,
+                color = VaultGold,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Text(
+                text = message,
+                color = VaultSilver,
+                fontSize = 12.sp,
+                lineHeight = 18.sp
             )
         }
     }
+}
+
+private fun formatBytes(bytes: Long): String {
+    if (bytes < 1024L) return "$bytes B"
+
+    val units = listOf("KB", "MB", "GB", "TB")
+    var value = bytes.toDouble()
+    var unitIndex = -1
+
+    while (value >= 1024.0 && unitIndex < units.lastIndex) {
+        value /= 1024.0
+        unitIndex++
+    }
+
+    return String.format(
+        java.util.Locale.US,
+        "%.2f %s",
+        value,
+        units[unitIndex]
+    )
 }
 
 @Composable
