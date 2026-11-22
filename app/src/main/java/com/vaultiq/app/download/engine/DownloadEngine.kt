@@ -1,19 +1,19 @@
 
 package com.vaultiq.app.download.engine
 
+import android.net.Uri
 import com.vaultiq.app.core.common.VaultResult
 import com.vaultiq.app.core.utils.UrlValidator
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
-import kotlinx.coroutines.withContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import java.io.OutputStream
 import java.util.concurrent.TimeUnit
 import java.util.regex.Pattern
-import kotlinx.coroutines.Job
 
 data class DownloadProgress(
     val downloadedBytes: Long,
@@ -33,7 +33,8 @@ data class DownloadSummary(
     val fileName: String,
     val mimeType: String?,
     val bytesDownloaded: Long,
-    val totalBytes: Long
+    val totalBytes: Long,
+    val destinationUri: Uri
 )
 
 class DownloadEngine(
@@ -47,7 +48,10 @@ class DownloadEngine(
 
     suspend fun download(
         url: String,
-        outputStream: OutputStream,
+        destinationFactory: (
+            String,
+            String?
+        ) -> VaultResult<DownloadOutput>,
         onProgress: (DownloadProgress) -> Unit = {}
     ): VaultResult<DownloadSummary> {
 
@@ -68,12 +72,14 @@ class DownloadEngine(
             val call = client.newCall(request)
             val job = currentCoroutineContext()[Job]
 
-            val cancellationHandle = job?.invokeOnCompletion {
-                cause ->
+            val cancellationHandle = job?.invokeOnCompletion { cause ->
                 if (cause != null) {
                     call.cancel()
                 }
             }
+
+            var createdOutput: DownloadOutput? = null
+            var completed = false
 
             try {
                 val response = call.execute()
@@ -115,34 +121,54 @@ class DownloadEngine(
                         validation.data.path
                     )
 
-                    var downloadedBytes = 0L
+                    val destinationResult = destinationFactory(
+                        fileName,
+                        mimeType
+                    )
 
-                    val input = body.byteStream()
-                    val buffer = ByteArray(64 * 1024)
-
-                    while (true) {
-
-                        currentCoroutineContext().ensureActive()
-
-                        val bytesRead = input.read(buffer)
-
-                        if (bytesRead == -1) {
-                            break
-                        }
-
-                        outputStream.write(buffer, 0, bytesRead)
-
-                        downloadedBytes += bytesRead
-
-                        onProgress(
-                            DownloadProgress(
-                                downloadedBytes = downloadedBytes,
-                                totalBytes = totalBytes
+                    val output = when (destinationResult) {
+                        is VaultResult.Success -> destinationResult.data
+                        is VaultResult.Error -> return@withContext destinationResult
+                        is VaultResult.Loading -> {
+                            return@withContext VaultResult.Error(
+                                "Download destination is unavailable."
                             )
-                        )
+                        }
                     }
 
-                    outputStream.flush()
+                    createdOutput = output
+
+                    var downloadedBytes = 0L
+
+                    output.outputStream.use { stream ->
+
+                        val input = body.byteStream()
+                        val buffer = ByteArray(64 * 1024)
+
+                        while (true) {
+
+                            currentCoroutineContext().ensureActive()
+
+                            val bytesRead = input.read(buffer)
+
+                            if (bytesRead == -1) {
+                                break
+                            }
+
+                            stream.write(buffer, 0, bytesRead)
+
+                            downloadedBytes += bytesRead
+
+                            onProgress(
+                                DownloadProgress(
+                                    downloadedBytes = downloadedBytes,
+                                    totalBytes = totalBytes
+                                )
+                            )
+                        }
+
+                        stream.flush()
+                    }
 
                     if (
                         totalBytes > 0 &&
@@ -153,12 +179,15 @@ class DownloadEngine(
                         )
                     }
 
+                    completed = true
+
                     VaultResult.Success(
                         DownloadSummary(
-                            fileName = fileName,
+                            fileName = output.fileName,
                             mimeType = mimeType,
                             bytesDownloaded = downloadedBytes,
-                            totalBytes = totalBytes
+                            totalBytes = downloadedBytes,
+                            destinationUri = output.uri
                         )
                     )
                 }
@@ -168,15 +197,26 @@ class DownloadEngine(
                 throw exception
 
             } catch (exception: Exception) {
-
                 VaultResult.Error(
-                    message = exception.message
-                        ?: "Download failed.",
+                    message = exception.message ?: "Download failed.",
                     cause = exception
                 )
 
             } finally {
                 cancellationHandle?.dispose()
+
+                if (!completed && createdOutput != null) {
+                    runCatching {
+                        createdOutput!!.outputStream.close()
+                    }
+
+                    runCatching {
+                        DownloadDestinationManagerCleanup.delete(
+                            createdOutput!!.uri,
+                            destinationFactory
+                        )
+                    }
+                }
             }
         }
     }
@@ -191,11 +231,7 @@ class DownloadEngine(
                 """filename\*?=(?:UTF-8''|")?([^";]+)""",
                 Pattern.CASE_INSENSITIVE
             ).matcher(it).let { matcher ->
-                if (matcher.find()) {
-                    matcher.group(1)
-                } else {
-                    null
-                }
+                if (matcher.find()) matcher.group(1) else null
             }
         }
 
@@ -206,7 +242,10 @@ class DownloadEngine(
         val safeName = candidate
             .substringAfterLast("/")
             .substringAfterLast("\\")
-            .replace(Regex("""[\u0000-\u001F<>:"|?*]"""), "_")
+            .replace(
+                Regex("""[\u0000-\u001F<>:"|?*]"""),
+                "_"
+            )
             .trim()
             .take(180)
 
