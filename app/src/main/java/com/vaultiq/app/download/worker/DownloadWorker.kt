@@ -1,21 +1,23 @@
 
 package com.vaultiq.app.download.worker
 
+import android.content.Context
 import android.net.Uri
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
 import com.vaultiq.app.core.common.VaultResult
-import com.vaultiq.app.data.database.DownloadEntity
 import com.vaultiq.app.data.database.VaultDatabase
 import com.vaultiq.app.data.repository.DownloadRepository
 import com.vaultiq.app.download.DownloadStatus
 import com.vaultiq.app.download.engine.DownloadEngine
 import java.io.IOException
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 
 class DownloadWorker(
-    appContext: android.content.Context,
+    appContext: Context,
     workerParams: WorkerParameters
 ) : CoroutineWorker(appContext, workerParams) {
 
@@ -39,15 +41,9 @@ class DownloadWorker(
             inputData.getString("destination_uri")
                 ?: return Result.failure()
 
-        if (downloadId <= 0L) {
-            return Result.failure()
-        }
+        if (downloadId <= 0L) return Result.failure()
 
-        val destinationUri = try {
-            Uri.parse(destinationValue)
-        } catch (exception: Exception) {
-            return Result.failure()
-        }
+        val destinationUri = Uri.parse(destinationValue)
 
         if (destinationUri.scheme != "content") {
             return Result.failure()
@@ -60,7 +56,7 @@ class DownloadWorker(
             else -> return Result.failure()
         }
 
-        repository.update(
+        val startResult = repository.update(
             record.copy(
                 status = DownloadStatus.RUNNING.name,
                 errorMessage = null,
@@ -69,16 +65,19 @@ class DownloadWorker(
             )
         )
 
+        if (startResult is VaultResult.Error) {
+            return Result.failure()
+        }
+
         return try {
 
-            val resolver = applicationContext.contentResolver
-
-            val outputStream = resolver.openOutputStream(
-                destinationUri,
-                "wt"
-            ) ?: throw IOException(
-                "Unable to open destination file."
-            )
+            val outputStream =
+                applicationContext.contentResolver.openOutputStream(
+                    destinationUri,
+                    "wt"
+                ) ?: throw IOException(
+                    "Unable to open destination file."
+                )
 
             val result = outputStream.use { stream ->
 
@@ -107,7 +106,7 @@ class DownloadWorker(
 
                     val summary = result.data
 
-                    val updated = repository.update(
+                    val updateResult = repository.update(
                         record.copy(
                             fileName = summary.fileName,
                             mimeType = summary.mimeType,
@@ -120,7 +119,7 @@ class DownloadWorker(
                         )
                     )
 
-                    if (updated is VaultResult.Success) {
+                    if (updateResult is VaultResult.Success) {
                         Result.success(
                             workDataOf(
                                 "download_id" to downloadId,
@@ -134,10 +133,8 @@ class DownloadWorker(
 
                 is VaultResult.Error -> {
 
-                    val exception = result.cause
-
                     if (
-                        exception is IOException &&
+                        result.cause is IOException &&
                         runAttemptCount < 3
                     ) {
                         repository.update(
@@ -162,29 +159,45 @@ class DownloadWorker(
                     }
                 }
 
-                VaultResult.Loading -> {
-                    Result.retry()
-                }
+                VaultResult.Loading -> Result.failure()
             }
-            } catch (exception: CancellationException) {
 
-    throw exception
+        } catch (exception: CancellationException) {
 
-} catch (exception: IOException) {
+            withContext(NonCancellable) {
+                repository.update(
+                    record.copy(
+                        status = DownloadStatus.PAUSED.name,
+                        errorMessage = "Download interrupted."
+                    )
+                )
+            }
+
+            throw exception
 
         } catch (exception: IOException) {
 
-            repository.update(
-                record.copy(
-                    status = DownloadStatus.FAILED.name,
-                    errorMessage = exception.message
-                        ?: "Storage or network error."
-                )
-            )
-
             if (runAttemptCount < 3) {
+
+                repository.update(
+                    record.copy(
+                        status = DownloadStatus.QUEUED.name,
+                        errorMessage = exception.message
+                    )
+                )
+
                 Result.retry()
+
             } else {
+
+                repository.update(
+                    record.copy(
+                        status = DownloadStatus.FAILED.name,
+                        errorMessage = exception.message
+                            ?: "Storage or network error."
+                    )
+                )
+
                 Result.failure()
             }
 
