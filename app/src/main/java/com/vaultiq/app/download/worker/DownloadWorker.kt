@@ -1,4 +1,3 @@
-
 package com.vaultiq.app.download.worker
 
 import android.content.Context
@@ -6,6 +5,7 @@ import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
 import com.vaultiq.app.core.common.VaultResult
+import com.vaultiq.app.data.database.DownloadEntity
 import com.vaultiq.app.data.database.VaultDatabase
 import com.vaultiq.app.data.repository.DownloadRepository
 import com.vaultiq.app.download.DownloadStatus
@@ -32,7 +32,6 @@ class DownloadWorker(
         DownloadDestinationManager(appContext)
 
     override suspend fun doWork(): Result {
-
         val downloadId = inputData.getLong(
             DownloadQueue.INPUT_DOWNLOAD_ID,
             -1L
@@ -58,22 +57,21 @@ class DownloadWorker(
             return Result.failure()
         }
 
-        val startResult = repository.update(
-            record.copy(
+        val startUpdated = updateRecord(downloadId) {
+            it.copy(
                 status = DownloadStatus.RUNNING.name,
                 errorMessage = null,
                 downloadedBytes = 0L,
                 totalBytes = 0L,
                 filePath = null
             )
-        )
+        }
 
-        if (startResult !is VaultResult.Success) {
+        if (!startUpdated) {
             return Result.failure()
         }
 
         return try {
-
             val result = engine.download(
                 url = url,
 
@@ -89,14 +87,11 @@ class DownloadWorker(
                 },
 
                 onProgress = { progress ->
-
                     setProgressAsync(
                         workDataOf(
                             "download_id" to downloadId,
-                            "downloaded_bytes" to
-                                progress.downloadedBytes,
-                            "total_bytes" to
-                                progress.totalBytes,
+                            "downloaded_bytes" to progress.downloadedBytes,
+                            "total_bytes" to progress.totalBytes,
                             "progress_percent" to
                                 (progress.percentage ?: -1)
                         )
@@ -105,13 +100,11 @@ class DownloadWorker(
             )
 
             when (result) {
-
                 is VaultResult.Success -> {
-
                     val summary = result.data
 
-                    val updateResult = repository.update(
-                        record.copy(
+                    val saved = updateRecord(downloadId) {
+                        it.copy(
                             fileName = summary.fileName,
                             mimeType = summary.mimeType,
                             filePath = summary.destinationUri.toString(),
@@ -120,14 +113,14 @@ class DownloadWorker(
                             status = DownloadStatus.COMPLETED.name,
                             errorMessage = null
                         )
-                    )
-                    if (updateResult is VaultResult.Success) {
+                    }
+
+                    if (saved) {
                         Result.success(
                             workDataOf(
                                 "download_id" to downloadId,
                                 "completed" to true,
-                                "file_uri" to
-                                    summary.destinationUri.toString()
+                                "file_uri" to summary.destinationUri.toString()
                             )
                         )
                     } else {
@@ -135,8 +128,8 @@ class DownloadWorker(
                             summary.destinationUri
                         )
 
-                        repository.update(
-                            record.copy(
+                        updateRecord(downloadId) {
+                            it.copy(
                                 status = DownloadStatus.FAILED.name,
                                 filePath = null,
                                 downloadedBytes = 0L,
@@ -144,84 +137,95 @@ class DownloadWorker(
                                 errorMessage =
                                     "Download completed but history could not be saved."
                             )
-                        )
+                        }
 
                         Result.failure()
                     }
                 }
 
                 is VaultResult.Error -> {
-
                     val canRetry =
                         result.cause is IOException &&
                             runAttemptCount < 3
 
                     if (canRetry) {
-
-                        repository.update(
-                            record.copy(
+                        updateRecord(downloadId) {
+                            it.copy(
                                 status = DownloadStatus.QUEUED.name,
                                 downloadedBytes = 0L,
                                 totalBytes = 0L,
                                 filePath = null,
                                 errorMessage = result.message
                             )
-                        )
+                        }
 
                         Result.retry()
-
                     } else {
-
-                        repository.update(
-                            record.copy(
+                        updateRecord(downloadId) {
+                            it.copy(
                                 status = DownloadStatus.FAILED.name,
                                 downloadedBytes = 0L,
                                 totalBytes = 0L,
                                 filePath = null,
                                 errorMessage = result.message
                             )
-                        )
+                        }
 
                         Result.failure()
                     }
                 }
 
                 is VaultResult.Loading -> {
-                    repository.update(
-                        record.copy(
+                    updateRecord(downloadId) {
+                        it.copy(
                             status = DownloadStatus.FAILED.name,
-                            errorMessage = "Download could not be completed."
+                            errorMessage =
+                                "Download could not be completed."
                         )
-                    )
+                    }
 
                     Result.failure()
                 }
             }
-
         } catch (exception: CancellationException) {
-
             withContext(NonCancellable) {
-                repository.update(
-                    record.copy(
-                        status = DownloadStatus.PAUSED.name,
-                        errorMessage = "Download interrupted."
+                updateRecord(downloadId) {
+                    it.copy(
+                        status = DownloadStatus.CANCELLED.name,
+                        downloadedBytes = 0L,
+                        totalBytes = 0L,
+                        filePath = null,
+                        errorMessage = "Download was cancelled."
                     )
-                )
+                }
             }
 
             throw exception
-
         } catch (exception: Exception) {
-
-            repository.update(
-                record.copy(
+            updateRecord(downloadId) {
+                it.copy(
                     status = DownloadStatus.FAILED.name,
                     errorMessage = exception.message
                         ?: "Unexpected download error."
                 )
-            )
+            }
 
             Result.failure()
         }
+    }
+
+    private suspend fun updateRecord(
+        downloadId: Long,
+        transform: (DownloadEntity) -> DownloadEntity
+    ): Boolean {
+        val currentResult = repository.getById(downloadId)
+
+        val current = when (currentResult) {
+            is VaultResult.Success -> currentResult.data
+            is VaultResult.Error -> return false
+            is VaultResult.Loading -> return false
+        }
+
+        return repository.update(transform(current)) is VaultResult.Success
     }
 }
