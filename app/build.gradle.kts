@@ -6,7 +6,7 @@ plugins {
 
 android {
     namespace = "com.vaultiq.app"
-    compileSdk = 37
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.vaultiq.app"
