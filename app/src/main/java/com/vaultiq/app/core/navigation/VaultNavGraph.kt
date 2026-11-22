@@ -22,12 +22,13 @@ object VaultRoutes {
 
 @Composable
 fun VaultNavGraph(
-    navController: NavHostController = rememberNavController()
+    navController: NavHostController = rememberNavController(),
+    modifier: Modifier = Modifier
 ) {
     NavHost(
         navController = navController,
         startDestination = VaultRoutes.HOME,
-        modifier = Modifier.fillMaxSize()
+        modifier = modifier
     ) {
         composable(VaultRoutes.HOME) {
             PlaceholderScreen("VAULTIQ HOME")
