@@ -12,6 +12,7 @@ import com.vaultiq.app.data.repository.DownloadRepository
 import com.vaultiq.app.download.DownloadStatus
 import com.vaultiq.app.download.engine.DownloadEngine
 import java.io.IOException
+import kotlinx.coroutines.CancellationException
 
 class DownloadWorker(
     appContext: android.content.Context,
@@ -165,6 +166,11 @@ class DownloadWorker(
                     Result.retry()
                 }
             }
+            } catch (exception: CancellationException) {
+
+    throw exception
+
+} catch (exception: IOException) {
 
         } catch (exception: IOException) {
 
