@@ -2,8 +2,10 @@
 package com.vaultiq.app.core.navigation
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Modifier
 import androidx.navigation.NavHostController
+import androidx.navigation.NavOptions
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
@@ -29,6 +31,15 @@ fun VaultNavGraph(
     shareError: String? = null,
     onClearSharedContent: () -> Unit = {}
 ) {
+
+    LaunchedEffect(sharedUrl, shareError) {
+        if (sharedUrl != null || shareError != null) {
+            navController.navigate(VaultRoutes.DOWNLOAD) {
+                launchSingleTop = true
+            }
+        }
+    }
+
     NavHost(
         navController = navController,
         startDestination = VaultRoutes.DOWNLOAD,
