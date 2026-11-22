@@ -121,7 +121,6 @@ class DownloadWorker(
                             errorMessage = null
                         )
                     )
-
                     if (updateResult is VaultResult.Success) {
                         Result.success(
                             workDataOf(
@@ -132,6 +131,21 @@ class DownloadWorker(
                             )
                         )
                     } else {
+                        destinationManager.deleteDestination(
+                            summary.destinationUri
+                        )
+
+                        repository.update(
+                            record.copy(
+                                status = DownloadStatus.FAILED.name,
+                                filePath = null,
+                                downloadedBytes = 0L,
+                                totalBytes = 0L,
+                                errorMessage =
+                                    "Download completed but history could not be saved."
+                            )
+                        )
+
                         Result.failure()
                     }
                 }
