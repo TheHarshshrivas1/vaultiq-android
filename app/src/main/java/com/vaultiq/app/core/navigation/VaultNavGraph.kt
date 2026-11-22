@@ -24,7 +24,10 @@ object VaultRoutes {
 @Composable
 fun VaultNavGraph(
     navController: NavHostController = rememberNavController(),
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    sharedUrl: String? = null,
+    shareError: String? = null,
+    onClearSharedContent: () -> Unit = {}
 ) {
     NavHost(
         navController = navController,
@@ -32,7 +35,11 @@ fun VaultNavGraph(
         modifier = modifier
     ) {
         composable(VaultRoutes.DOWNLOAD) {
-            DownloadScreen()
+            DownloadScreen(
+                sharedUrl = sharedUrl,
+                shareError = shareError,
+                onClearSharedContent = onClearSharedContent
+            )
         }
 
         composable(VaultRoutes.PLAY) {
