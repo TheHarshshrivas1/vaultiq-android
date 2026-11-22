@@ -54,6 +54,72 @@ class DownloadDestinationManager(context: Context) {
         }
     }
 
+    fun deleteDestination(uri: Uri): VaultResult<Unit> {
+        return try {
+            when (uri.scheme) {
+                "content" -> {
+                    val deleted = DocumentsContract.deleteDocument(
+                        resolver,
+                        uri
+                    )
+
+                    if (!deleted) {
+                        return VaultResult.Error(
+                            "Unable to remove incomplete downloaded file."
+                        )
+                    }
+                }
+
+                "file" -> {
+                    val directoryResult =
+                        storageManager.getPrivateDownloadsDirectory()
+
+                    val directory = when (directoryResult) {
+                        is VaultResult.Success -> directoryResult.data
+                        is VaultResult.Error -> return directoryResult
+                        is VaultResult.Loading -> {
+                            return VaultResult.Error(
+                                "Private storage is unavailable."
+                            )
+                        }
+                    }
+
+                    val target = File(uri.path ?: return VaultResult.Error(
+                        "Invalid private file location."
+                    )).canonicalFile
+
+                    val allowedDirectory = directory.canonicalFile
+
+                    if (target.parentFile != allowedDirectory) {
+                        return VaultResult.Error(
+                            "File is outside VAULTIQ storage."
+                        )
+                    }
+
+                    if (target.exists() && !target.delete()) {
+                        return VaultResult.Error(
+                            "Unable to delete incomplete private file."
+                        )
+                    }
+                }
+
+                else -> {
+                    return VaultResult.Error(
+                        "Unsupported destination location."
+                    )
+                }
+            }
+
+            VaultResult.Success(Unit)
+
+        } catch (exception: Exception) {
+            VaultResult.Error(
+                "Unable to delete incomplete download.",
+                exception
+            )
+        }
+    }
+
     private fun createPrivateDestination(
         fileName: String
     ): VaultResult<DownloadOutput> {
@@ -78,7 +144,12 @@ class DownloadDestinationManager(context: Context) {
             )
         }
 
-        val stream = FileOutputStream(file)
+        val stream = try {
+            FileOutputStream(file)
+        } catch (exception: Exception) {
+            file.delete()
+            throw exception
+        }
 
         return VaultResult.Success(
             DownloadOutput(
@@ -126,9 +197,20 @@ class DownloadDestinationManager(context: Context) {
         val stream = resolver.openOutputStream(
             documentUri,
             "wt"
-        ) ?: return VaultResult.Error(
-            "Unable to open the selected file."
         )
+
+        if (stream == null) {
+            runCatching {
+                DocumentsContract.deleteDocument(
+                    resolver,
+                    documentUri
+                )
+            }
+
+            return VaultResult.Error(
+                "Unable to open the selected file."
+            )
+        }
 
         return VaultResult.Success(
             DownloadOutput(
