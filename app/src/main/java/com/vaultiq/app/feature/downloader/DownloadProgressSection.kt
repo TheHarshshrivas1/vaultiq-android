@@ -138,7 +138,8 @@ private fun DownloadProgressCard(
     val percentage = when {
         progress?.state == WorkInfo.State.SUCCEEDED -> 100
         record.status == "COMPLETED" -> 100
-        progress?.percentage in 0..100 -> progress.percentage
+        progress?.percentage?.takeIf { it in 0..100 } != null ->
+    progress.percentage
         else -> null
     }
 
