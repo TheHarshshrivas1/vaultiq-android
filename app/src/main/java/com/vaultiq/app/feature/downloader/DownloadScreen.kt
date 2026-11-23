@@ -501,6 +501,9 @@ private fun SearchContent(
                 message = inspectionError
             )
         }
+                Spacer(modifier = Modifier.height(24.dp))
+
+        DownloadProgressSection()
 
         Spacer(modifier = Modifier.height(26.dp))
 
