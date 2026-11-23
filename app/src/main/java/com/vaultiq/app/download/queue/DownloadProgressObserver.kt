@@ -27,7 +27,9 @@ class DownloadProgressObserver(context: Context) {
                 DownloadQueue.uniqueWorkName(downloadId)
             )
             .map { workInfos ->
-                workInfos.firstOrNull()?.let { toProgressInfo(it) }
+                workInfos.firstOrNull()?.let {
+                    toProgressInfo(it)
+                }
             }
     }
 
@@ -44,8 +46,18 @@ class DownloadProgressObserver(context: Context) {
     private fun toProgressInfo(
         workInfo: WorkInfo
     ): DownloadProgressInfo? {
+
         val progress = workInfo.progress
-        val downloadId = progress.getLong("download_id", -1L)
+
+        val taggedId = workInfo.tags
+            .firstOrNull {
+                it.startsWith("vaultiq_download:")
+            }
+            ?.substringAfterLast(":")
+            ?.toLongOrNull()
+
+        val downloadId = taggedId
+            ?: progress.getLong("download_id", -1L)
 
         if (downloadId <= 0L) return null
 
