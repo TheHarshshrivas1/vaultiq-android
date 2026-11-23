@@ -9,24 +9,31 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.work.WorkInfo
+import com.vaultiq.app.core.common.VaultResult
 import com.vaultiq.app.data.database.DownloadEntity
 import com.vaultiq.app.data.database.VaultDatabase
 import com.vaultiq.app.data.repository.DownloadRepository
+import com.vaultiq.app.download.DownloadStatus
 import com.vaultiq.app.download.queue.DownloadProgressInfo
 import com.vaultiq.app.download.queue.DownloadProgressObserver
+import com.vaultiq.app.download.queue.DownloadQueue
 import com.vaultiq.app.ui.theme.VaultGold
 import com.vaultiq.app.ui.theme.VaultMuted
 import com.vaultiq.app.ui.theme.VaultNavy
@@ -34,6 +41,7 @@ import com.vaultiq.app.ui.theme.VaultPanel
 import com.vaultiq.app.ui.theme.VaultSilver
 import com.vaultiq.app.ui.theme.VaultWhite
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.launch
 
 private data class DownloadActivityItem(
     val record: DownloadEntity,
@@ -43,6 +51,7 @@ private data class DownloadActivityItem(
 @Composable
 fun DownloadProgressSection() {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
 
     val repository = remember {
         DownloadRepository(
@@ -59,7 +68,6 @@ fun DownloadProgressSection() {
             repository.observeAll(),
             observer.observeAll()
         ) { records, progressItems ->
-
             val progressById = progressItems.associateBy {
                 it.downloadId
             }
@@ -104,7 +112,80 @@ fun DownloadProgressSection() {
             }
         } else {
             downloads.forEach { item ->
-                DownloadProgressCard(item)
+                DownloadProgressCard(
+                    item = item,
+                    onCancel = {
+                        scope.launch {
+                            try {
+                                DownloadQueue.cancel(
+                                    context,
+                                    item.record.id
+                                )
+
+                                repository.update(
+                                    item.record.copy(
+                                        status = DownloadStatus.CANCELLED.name,
+                                        errorMessage = "Cancelled by user."
+                                    )
+                                )
+                            } catch (exception: Exception) {
+                                repository.update(
+                                    item.record.copy(
+                                        errorMessage =
+                                            "Unable to cancel this download."
+                                    )
+                                )
+                            }
+                        }
+                    },
+                    onRetry = {
+                        scope.launch {
+                            val queuedRecord = item.record.copy(
+                                status = DownloadStatus.QUEUED.name,
+                                downloadedBytes = 0L,
+                                totalBytes = 0L,
+                                filePath = null,
+                                errorMessage = null
+                            )
+
+                            when (repository.update(queuedRecord)) {
+                                is VaultResult.Success -> {
+                                    when (
+                                        val result = DownloadQueue.enqueue(
+                                            context = context,
+                                            downloadId = item.record.id,
+                                            url = item.record.url
+                                        )
+                                    ) {
+                                        is VaultResult.Success -> Unit
+
+                                        is VaultResult.Error -> {
+                                            repository.update(
+                                                queuedRecord.copy(
+                                                    status = DownloadStatus.FAILED.name,
+                                                    errorMessage = result.message
+                                                )
+                                            )
+                                        }
+
+                                        is VaultResult.Loading -> {
+                                            repository.update(
+                                                queuedRecord.copy(
+                                                    status = DownloadStatus.FAILED.name,
+                                                    errorMessage =
+                                                        "Unable to retry download."
+                                                )
+                                            )
+                                        }
+                                    }
+                                }
+
+                                is VaultResult.Error -> Unit
+                                is VaultResult.Loading -> Unit
+                            }
+                        }
+                    }
+                )
             }
         }
     }
@@ -112,7 +193,9 @@ fun DownloadProgressSection() {
 
 @Composable
 private fun DownloadProgressCard(
-    item: DownloadActivityItem
+    item: DownloadActivityItem,
+    onCancel: () -> Unit,
+    onRetry: () -> Unit
 ) {
     val record = item.record
     val progress = item.progress
@@ -136,14 +219,29 @@ private fun DownloadProgressCard(
             ?: record.totalBytes
 
     val percentage = when {
-    progress?.state == WorkInfo.State.SUCCEEDED -> 100
-    record.status == "COMPLETED" -> 100
-    else -> progress?.percentage?.takeIf { it in 0..100 }
+        progress?.state == WorkInfo.State.SUCCEEDED -> 100
+        record.status == "COMPLETED" -> 100
+        else -> progress?.percentage?.takeIf { it in 0..100 }
     }
 
     val isRunning =
         progress?.state == WorkInfo.State.RUNNING ||
             (progress == null && record.status == "RUNNING")
+
+    val canCancel =
+        progress?.state == WorkInfo.State.RUNNING ||
+            progress?.state == WorkInfo.State.ENQUEUED ||
+            progress?.state == WorkInfo.State.BLOCKED ||
+            (progress == null &&
+                (record.status == "RUNNING" ||
+                    record.status == "QUEUED"))
+
+    val canRetry =
+        progress?.state == WorkInfo.State.FAILED ||
+            progress?.state == WorkInfo.State.CANCELLED ||
+            (progress == null &&
+                (record.status == "FAILED" ||
+                    record.status == "CANCELLED"))
 
     Surface(
         modifier = Modifier.fillMaxWidth(),
@@ -226,6 +324,44 @@ private fun DownloadProgressCard(
                     color = VaultMuted,
                     fontSize = 10.sp
                 )
+            }
+
+            if (canCancel || canRetry) {
+                Spacer(modifier = Modifier.height(14.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    if (canCancel) {
+                        OutlinedButton(
+                            onClick = onCancel,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text(
+                                text = "CANCEL",
+                                fontSize = 10.sp
+                            )
+                        }
+                    }
+
+                    if (canRetry) {
+                        Button(
+                            onClick = onRetry,
+                            modifier = Modifier.weight(1f),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = VaultGold,
+                                contentColor = VaultNavy
+                            )
+                        ) {
+                            Text(
+                                text = "RETRY",
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                }
             }
         }
     }
