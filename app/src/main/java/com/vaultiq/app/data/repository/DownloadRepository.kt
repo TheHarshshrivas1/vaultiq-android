@@ -83,6 +83,21 @@ class DownloadRepository(
         }
     }
 
+    suspend fun clearCompletedHistory(): VaultResult<Int> {
+        return try {
+            VaultResult.Success(
+                downloadDao.deleteCompletedHistory()
+            )
+        } catch (exception: CancellationException) {
+            throw exception
+        } catch (exception: Exception) {
+            VaultResult.Error(
+                "Unable to clear completed download history.",
+                exception
+            )
+        }
+    }
+
     suspend fun getCount(): VaultResult<Int> {
         return try {
             VaultResult.Success(downloadDao.getCount())
