@@ -70,6 +70,14 @@ class DownloadWorker(
         if (!startUpdated) {
             return Result.failure()
         }
+                setProgress(
+            workDataOf(
+                "download_id" to downloadId,
+                "downloaded_bytes" to 0L,
+                "total_bytes" to 0L,
+                "progress_percent" to -1
+            )
+        )
 
         return try {
             val result = engine.download(
