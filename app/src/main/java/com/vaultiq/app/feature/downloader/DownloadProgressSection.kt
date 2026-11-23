@@ -40,6 +40,7 @@ import com.vaultiq.app.ui.theme.VaultNavy
 import com.vaultiq.app.ui.theme.VaultPanel
 import com.vaultiq.app.ui.theme.VaultSilver
 import com.vaultiq.app.ui.theme.VaultWhite
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 
@@ -68,6 +69,7 @@ fun DownloadProgressSection() {
             repository.observeAll(),
             observer.observeAll()
         ) { records, progressItems ->
+
             val progressById = progressItems.associateBy {
                 it.downloadId
             }
@@ -112,8 +114,10 @@ fun DownloadProgressSection() {
             }
         } else {
             downloads.forEach { item ->
+
                 DownloadProgressCard(
                     item = item,
+
                     onCancel = {
                         scope.launch {
                             try {
@@ -128,6 +132,10 @@ fun DownloadProgressSection() {
                                         errorMessage = "Cancelled by user."
                                     )
                                 )
+
+                            } catch (exception: CancellationException) {
+                                throw exception
+
                             } catch (exception: Exception) {
                                 repository.update(
                                     item.record.copy(
@@ -138,6 +146,7 @@ fun DownloadProgressSection() {
                             }
                         }
                     },
+
                     onRetry = {
                         scope.launch {
                             val queuedRecord = item.record.copy(
@@ -148,40 +157,60 @@ fun DownloadProgressSection() {
                                 errorMessage = null
                             )
 
-                            when (repository.update(queuedRecord)) {
-                                is VaultResult.Success -> {
-                                    when (
-                                        val result = DownloadQueue.enqueue(
-                                            context = context,
-                                            downloadId = item.record.id,
-                                            url = item.record.url
-                                        )
-                                    ) {
-                                        is VaultResult.Success -> Unit
+                            try {
+                                when (
+                                    val updateResult =
+                                        repository.update(queuedRecord)
+                                ) {
+                                    is VaultResult.Success -> {
 
-                                        is VaultResult.Error -> {
-                                            repository.update(
-                                                queuedRecord.copy(
-                                                    status = DownloadStatus.FAILED.name,
-                                                    errorMessage = result.message
+                                        when (
+                                            val enqueueResult =
+                                                DownloadQueue.enqueue(
+                                                    context = context,
+                                                    downloadId = item.record.id,
+                                                    url = item.record.url
                                                 )
-                                            )
-                                        }
+                                        ) {
+                                            is VaultResult.Success -> Unit
 
-                                        is VaultResult.Loading -> {
-                                            repository.update(
-                                                queuedRecord.copy(
-                                                    status = DownloadStatus.FAILED.name,
-                                                    errorMessage =
-                                                        "Unable to retry download."
+                                            is VaultResult.Error -> {
+                                                repository.update(
+                                                    queuedRecord.copy(
+                                                        status = DownloadStatus.FAILED.name,
+                                                        errorMessage =
+                                                            enqueueResult.message
+                                                    )
                                                 )
-                                            )
+                                            }
+
+                                            is VaultResult.Loading -> {
+                                                repository.update(
+                                                    queuedRecord.copy(
+                                                        status = DownloadStatus.FAILED.name,
+                                                        errorMessage =
+                                                            "Unable to retry download."
+                                                    )
+                                                )
+                                            }
                                         }
                                     }
+
+                                    is VaultResult.Error -> Unit
+                                    is VaultResult.Loading -> Unit
                                 }
 
-                                is VaultResult.Error -> Unit
-                                is VaultResult.Loading -> Unit
+                            } catch (exception: CancellationException) {
+                                throw exception
+
+                            } catch (exception: Exception) {
+                                repository.update(
+                                    queuedRecord.copy(
+                                        status = DownloadStatus.FAILED.name,
+                                        errorMessage =
+                                            "An unexpected error occurred while retrying."
+                                    )
+                                )
                             }
                         }
                     }
@@ -220,28 +249,29 @@ private fun DownloadProgressCard(
 
     val percentage = when {
         progress?.state == WorkInfo.State.SUCCEEDED -> 100
-        record.status == "COMPLETED" -> 100
+        record.status == DownloadStatus.COMPLETED.name -> 100
         else -> progress?.percentage?.takeIf { it in 0..100 }
     }
 
     val isRunning =
         progress?.state == WorkInfo.State.RUNNING ||
-            (progress == null && record.status == "RUNNING")
+            (progress == null &&
+                record.status == DownloadStatus.RUNNING.name)
 
     val canCancel =
         progress?.state == WorkInfo.State.RUNNING ||
             progress?.state == WorkInfo.State.ENQUEUED ||
             progress?.state == WorkInfo.State.BLOCKED ||
             (progress == null &&
-                (record.status == "RUNNING" ||
-                    record.status == "QUEUED"))
+                (record.status == DownloadStatus.RUNNING.name ||
+                    record.status == DownloadStatus.QUEUED.name))
 
     val canRetry =
         progress?.state == WorkInfo.State.FAILED ||
             progress?.state == WorkInfo.State.CANCELLED ||
             (progress == null &&
-                (record.status == "FAILED" ||
-                    record.status == "CANCELLED"))
+                (record.status == DownloadStatus.FAILED.name ||
+                    record.status == DownloadStatus.CANCELLED.name))
 
     Surface(
         modifier = Modifier.fillMaxWidth(),
@@ -283,7 +313,7 @@ private fun DownloadProgressCard(
 
                 if (percentage != null) {
                     LinearProgressIndicator(
-                        progress = percentage / 100f,
+                        progress = { percentage / 100f },
                         modifier = Modifier.fillMaxWidth(),
                         color = VaultGold,
                         trackColor = VaultNavy
