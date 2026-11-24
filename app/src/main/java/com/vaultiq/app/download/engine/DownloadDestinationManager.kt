@@ -27,7 +27,6 @@ class DownloadDestinationManager(context: Context) {
         fileName: String,
         mimeType: String?
     ): VaultResult<DownloadOutput> {
-
         val safeName = sanitizeFileName(fileName)
 
         if (safeName.isBlank()) {
@@ -84,10 +83,12 @@ class DownloadDestinationManager(context: Context) {
                         }
                     }
 
-                    val target = File(uri.path ?: return VaultResult.Error(
-                        "Invalid private file location."
-                    )).canonicalFile
+                    val path = uri.path
+                        ?: return VaultResult.Error(
+                            "Invalid private file location."
+                        )
 
+                    val target = File(path).canonicalFile
                     val allowedDirectory = directory.canonicalFile
 
                     if (target.parentFile != allowedDirectory) {
@@ -111,7 +112,6 @@ class DownloadDestinationManager(context: Context) {
             }
 
             VaultResult.Success(Unit)
-
         } catch (exception: Exception) {
             VaultResult.Error(
                 "Unable to delete incomplete download.",
@@ -123,7 +123,6 @@ class DownloadDestinationManager(context: Context) {
     private fun createPrivateDestination(
         fileName: String
     ): VaultResult<DownloadOutput> {
-
         val directory = when (
             val result = storageManager.getPrivateDownloadsDirectory()
         ) {
@@ -136,11 +135,15 @@ class DownloadDestinationManager(context: Context) {
             }
         }
 
-        val file = File(directory, fileName)
+        val uniqueName = findUniqueName(fileName) {
+            File(directory, it).exists()
+        }
 
-        if (file.exists()) {
+        val file = File(directory, uniqueName)
+
+        if (!file.createNewFile()) {
             return VaultResult.Error(
-                "A file with this name already exists."
+                "Unable to reserve a unique download filename."
             )
         }
 
@@ -165,7 +168,6 @@ class DownloadDestinationManager(context: Context) {
         fileName: String,
         mimeType: String?
     ): VaultResult<DownloadOutput> {
-
         val documentId =
             DocumentsContract.getTreeDocumentId(treeUri)
 
@@ -175,31 +177,89 @@ class DownloadDestinationManager(context: Context) {
                 documentId
             )
 
+        val childrenUri =
+            DocumentsContract.buildChildDocumentsUriUsingTree(
+                treeUri,
+                documentId
+            )
+
+        val existingNames = resolver.query(
+            childrenUri,
+            arrayOf(DocumentsContract.Document.COLUMN_DISPLAY_NAME),
+            null,
+            null,
+            null
+        )?.use { cursor ->
+            buildSet {
+                val nameColumn = cursor.getColumnIndex(
+                    DocumentsContract.Document.COLUMN_DISPLAY_NAME
+                )
+
+                if (nameColumn >= 0) {
+                    while (cursor.moveToNext()) {
+                        cursor.getString(nameColumn)?.let(::add)
+                    }
+                }
+            }
+        } ?: return VaultResult.Error(
+            "Unable to check existing files in the selected folder."
+        )
+
+        val uniqueName = findUniqueName(fileName) {
+            it in existingNames
+        }
+
         val resolvedMimeType = mimeType
             ?.takeIf { it.contains("/") }
             ?: MimeTypeMap.getSingleton()
                 .getMimeTypeFromExtension(
-                    fileName.substringAfterLast(".", "")
+                    uniqueName.substringAfterLast(".", "")
                         .lowercase()
                 )
             ?: "application/octet-stream"
 
-        val documentUri =
-            DocumentsContract.createDocument(
-                resolver,
-                parentUri,
-                resolvedMimeType,
-                fileName
-            ) ?: return VaultResult.Error(
-                "Unable to create file in selected folder."
-            )
-
-        val stream = resolver.openOutputStream(
-            documentUri,
-            "wt"
+        val documentUri = DocumentsContract.createDocument(
+            resolver,
+            parentUri,
+            resolvedMimeType,
+            uniqueName
+        ) ?: return VaultResult.Error(
+            "Unable to create file in selected folder."
         )
 
-        if (stream == null) {
+        return try {
+            val stream = resolver.openOutputStream(
+                documentUri,
+                "wt"
+            ) ?: throw IllegalStateException(
+                "Unable to open the selected file."
+            )
+
+            val actualName = resolver.query(
+                documentUri,
+                arrayOf(DocumentsContract.Document.COLUMN_DISPLAY_NAME),
+                null,
+                null,
+                null
+            )?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val index = cursor.getColumnIndex(
+                        DocumentsContract.Document.COLUMN_DISPLAY_NAME
+                    )
+                    if (index >= 0) cursor.getString(index) else null
+                } else {
+                    null
+                }
+            } ?: uniqueName
+
+            VaultResult.Success(
+                DownloadOutput(
+                    uri = documentUri,
+                    outputStream = stream,
+                    fileName = actualName
+                )
+            )
+        } catch (exception: Exception) {
             runCatching {
                 DocumentsContract.deleteDocument(
                     resolver,
@@ -207,17 +267,41 @@ class DownloadDestinationManager(context: Context) {
                 )
             }
 
-            return VaultResult.Error(
-                "Unable to open the selected file."
-            )
+            throw exception
+        }
+    }
+
+    private fun findUniqueName(
+        originalName: String,
+        exists: (String) -> Boolean
+    ): String {
+        if (!exists(originalName)) return originalName
+
+        val dotIndex = originalName.lastIndexOf('.')
+        val hasExtension = dotIndex > 0
+
+        val baseName = if (hasExtension) {
+            originalName.substring(0, dotIndex)
+        } else {
+            originalName
         }
 
-        return VaultResult.Success(
-            DownloadOutput(
-                uri = documentUri,
-                outputStream = stream,
-                fileName = fileName
-            )
+        val extension = if (hasExtension) {
+            originalName.substring(dotIndex)
+        } else {
+            ""
+        }
+
+        for (number in 1..9999) {
+            val candidate = "$baseName ($number)$extension"
+
+            if (!exists(candidate)) {
+                return candidate
+            }
+        }
+
+        throw IllegalStateException(
+            "Unable to find an available filename."
         )
     }
 
