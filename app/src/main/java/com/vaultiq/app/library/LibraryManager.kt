@@ -5,7 +5,9 @@ import android.content.Context
 import android.net.Uri
 import android.provider.DocumentsContract
 import android.database.Cursor
+import android.webkit.MimeTypeMap
 import com.vaultiq.app.core.common.VaultResult
+import java.io.File
 
 data class VaultFile(
     val uri: Uri,
@@ -16,11 +18,11 @@ data class VaultFile(
     val isDirectory: Boolean
 )
 
-class LibraryManager(
-    private val context: Context
-) {
+class LibraryManager(context: Context) {
 
-    private val resolver = context.contentResolver
+    private val appContext = context.applicationContext
+    private val resolver = appContext.contentResolver
+    private val storageManager = StorageAccessManager(appContext)
 
     private val projection = arrayOf(
         DocumentsContract.Document.COLUMN_DOCUMENT_ID,
@@ -31,6 +33,73 @@ class LibraryManager(
         DocumentsContract.Document.COLUMN_FLAGS
     )
 
+    /**
+     * Lists files from VAULTIQ private storage
+     * and the optional user-selected shared folder.
+     */
+    fun listAllFiles(): VaultResult<List<VaultFile>> {
+        return try {
+            val privateDirectory = when (
+                val result = storageManager.getPrivateDownloadsDirectory()
+            ) {
+                is VaultResult.Success -> result.data
+                is VaultResult.Error -> return result
+                is VaultResult.Loading -> {
+                    return VaultResult.Error(
+                        "Private storage is unavailable."
+                    )
+                }
+            }
+
+            val privateFiles = privateDirectory.listFiles()
+                ?: return VaultResult.Error(
+                    "Unable to read VAULTIQ private storage."
+                )
+
+            val files = mutableListOf<VaultFile>()
+
+            privateFiles
+                .filter { it.isFile }
+                .forEach { file ->
+                    files.add(file.toVaultFile())
+                }
+
+            val selectedFolder = storageManager.getSelectedFolder()
+
+            if (selectedFolder != null) {
+                when (val result = listFiles(selectedFolder)) {
+                    is VaultResult.Success -> {
+                        files.addAll(
+                            result.data.filterNot { it.isDirectory }
+                        )
+                    }
+
+                    is VaultResult.Error -> return result
+
+                    is VaultResult.Loading -> {
+                        return VaultResult.Error(
+                            "Shared storage is still loading."
+                        )
+                    }
+                }
+            }
+
+            VaultResult.Success(
+                files.distinctBy { it.uri.toString() }
+                    .sortedByDescending { it.lastModified }
+            )
+
+        } catch (exception: Exception) {
+            VaultResult.Error(
+                "Unable to scan VAULTIQ library.",
+                exception
+            )
+        }
+    }
+
+    /**
+     * Lists the direct contents of a selected SAF folder.
+     */
     fun listFiles(treeUri: Uri): VaultResult<List<VaultFile>> {
 
         if (treeUri.scheme != "content") {
@@ -38,7 +107,6 @@ class LibraryManager(
         }
 
         return try {
-
             val rootId =
                 DocumentsContract.getTreeDocumentId(treeUri)
 
@@ -59,7 +127,6 @@ class LibraryManager(
             )?.use { cursor ->
 
                 while (cursor.moveToNext()) {
-
                     val file = cursor.toVaultFile(treeUri)
 
                     if (file != null) {
@@ -73,7 +140,6 @@ class LibraryManager(
             VaultResult.Success(files)
 
         } catch (exception: Exception) {
-
             VaultResult.Error(
                 "Unable to load library files.",
                 exception
@@ -87,7 +153,6 @@ class LibraryManager(
     ): VaultResult<List<VaultFile>> {
 
         return when (val result = listFiles(treeUri)) {
-
             is VaultResult.Success -> {
                 val filtered = result.data.filter {
                     it.name.contains(
@@ -100,8 +165,7 @@ class LibraryManager(
             }
 
             is VaultResult.Error -> result
-
-            VaultResult.Loading -> VaultResult.Loading
+            is VaultResult.Loading -> VaultResult.Loading
         }
     }
 
@@ -126,7 +190,6 @@ class LibraryManager(
         }
 
         return try {
-
             val renamedUri =
                 DocumentsContract.renameDocument(
                     resolver,
@@ -141,7 +204,6 @@ class LibraryManager(
             }
 
         } catch (exception: Exception) {
-
             VaultResult.Error(
                 "File rename failed.",
                 exception
@@ -152,7 +214,6 @@ class LibraryManager(
     fun deleteFile(fileUri: Uri): VaultResult<Unit> {
 
         return try {
-
             val deleted =
                 DocumentsContract.deleteDocument(
                     resolver,
@@ -166,12 +227,27 @@ class LibraryManager(
             }
 
         } catch (exception: Exception) {
-
             VaultResult.Error(
                 "File deletion failed.",
                 exception
             )
         }
+    }
+
+    private fun File.toVaultFile(): VaultFile {
+        val extension = extension.lowercase()
+
+        val mimeType = MimeTypeMap.getSingleton()
+            .getMimeTypeFromExtension(extension)
+
+        return VaultFile(
+            uri = Uri.fromFile(this),
+            name = name,
+            mimeType = mimeType,
+            sizeBytes = length(),
+            lastModified = lastModified(),
+            isDirectory = false
+        )
     }
 
     private fun Cursor.toVaultFile(
