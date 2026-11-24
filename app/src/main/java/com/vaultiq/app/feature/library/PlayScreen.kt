@@ -15,13 +15,16 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -42,7 +45,9 @@ import com.vaultiq.app.ui.theme.VaultNavy
 import com.vaultiq.app.ui.theme.VaultPanel
 import com.vaultiq.app.ui.theme.VaultSilver
 import com.vaultiq.app.ui.theme.VaultWhite
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @Composable
 fun PlayScreen() {
@@ -54,6 +59,10 @@ fun PlayScreen() {
         mutableStateOf(false)
     }
 
+    var isLoadingLibrary by remember {
+        mutableStateOf(false)
+    }
+
     var importMessage by remember {
         mutableStateOf<String?>(null)
     }
@@ -62,8 +71,52 @@ fun PlayScreen() {
         mutableStateOf(false)
     }
 
+    var libraryMessage by remember {
+        mutableStateOf<String?>(null)
+    }
+
+    var allFiles by remember {
+        mutableStateOf<List<VaultFile>>(emptyList())
+    }
+
+    var refreshKey by remember {
+        mutableStateOf(0)
+    }
+
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+
+    LaunchedEffect(refreshKey) {
+        isLoadingLibrary = true
+        libraryMessage = null
+
+        try {
+            when (
+                val result = withContext(Dispatchers.IO) {
+                    LibraryManager(context).listAllFiles()
+                }
+            ) {
+                is VaultResult.Success -> {
+                    allFiles = result.data.filterNot {
+                        it.isDirectory
+                    }
+                }
+
+                is VaultResult.Error -> {
+                    libraryMessage = result.message
+                }
+
+                is VaultResult.Loading -> {
+                    libraryMessage = "Library is still loading."
+                }
+            }
+        } catch (exception: Exception) {
+            libraryMessage =
+                exception.message ?: "Unable to load library."
+        } finally {
+            isLoadingLibrary = false
+        }
+    }
 
     val filePicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
@@ -82,23 +135,16 @@ fun PlayScreen() {
                         is VaultResult.Success -> {
                             val imported = result.data
 
-                            selectedCategory = when {
-                                imported.mimeType?.startsWith("video/") == true ->
-                                    "Videos"
-
-                                imported.mimeType?.startsWith("audio/") == true ->
-                                    "Music"
-
-                                imported.mimeType?.startsWith("image/") == true ->
-                                    "Images"
-
-                                else -> "Files"
-                            }
+                            selectedCategory = getMediaCategory(
+                                imported.mimeType,
+                                imported.fileName
+                            )
 
                             importMessage =
                                 "Imported: ${imported.fileName}\n" +
-                                "Size: ${formatImportSize(imported.sizeBytes)}\n" +
-                                "Saved in VAULTIQ storage."
+                                "Size: ${formatImportSize(imported.sizeBytes)}"
+
+                            refreshKey++
                         }
 
                         is VaultResult.Error -> {
@@ -111,7 +157,9 @@ fun PlayScreen() {
                             importMessage = "Import is still processing."
                         }
                     }
-                } catch (exception: kotlinx.coroutines.CancellationException) {
+                } catch (
+                    exception: kotlinx.coroutines.CancellationException
+                ) {
                     throw exception
                 } catch (exception: Exception) {
                     importIsError = true
@@ -131,10 +179,15 @@ fun PlayScreen() {
         "Files"
     )
 
+    val visibleFiles = allFiles.filter { file ->
+        getMediaCategory(file.mimeType, file.name) == selectedCategory
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(VaultNavy)
+            .verticalScroll(rememberScrollState())
             .padding(horizontal = 18.dp, vertical = 20.dp)
     ) {
         Text(
@@ -169,7 +222,7 @@ fun PlayScreen() {
             }
         }
 
-        Spacer(modifier = Modifier.height(24.dp))
+        Spacer(modifier = Modifier.height(22.dp))
 
         Button(
             onClick = {
@@ -206,62 +259,175 @@ fun PlayScreen() {
         Spacer(modifier = Modifier.height(12.dp))
 
         Text(
-            text = "Select your own or authorized videos, music and images.",
+            text = "Your imported and downloaded media appears here.",
             color = VaultMuted,
             fontSize = 10.sp
         )
 
         if (importMessage != null) {
-            Spacer(modifier = Modifier.height(18.dp))
+            Spacer(modifier = Modifier.height(14.dp))
 
-            Surface(
-                modifier = Modifier.fillMaxWidth(),
-                color = VaultPanel,
-                shape = RoundedCornerShape(15.dp)
-            ) {
-                Text(
-                    text = importMessage!!,
-                    modifier = Modifier.padding(15.dp),
-                    color = if (importIsError) VaultSilver else VaultGold,
-                    fontSize = 12.sp,
-                    lineHeight = 19.sp
-                )
-            }
+            MessageCard(
+                message = importMessage!!,
+                isError = importIsError
+            )
         }
 
         Spacer(modifier = Modifier.height(24.dp))
 
-        Box(
-            modifier = Modifier.fillMaxSize(),
-            contentAlignment = Alignment.Center
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
         ) {
+            Text(
+                text = selectedCategory.uppercase(),
+                color = VaultWhite,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold
+            )
+
+            Text(
+                text = "${visibleFiles.size} ITEMS",
+                color = VaultMuted,
+                fontSize = 10.sp
+            )
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        when {
+            isLoadingLibrary -> {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 35.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    CircularProgressIndicator(
+                        color = VaultGold,
+                        modifier = Modifier.size(28.dp),
+                        strokeWidth = 2.dp
+                    )
+                }
+            }
+
+            libraryMessage != null -> {
+                MessageCard(
+                    message = libraryMessage!!,
+                    isError = true
+                )
+            }
+
+            visibleFiles.isEmpty() -> {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 35.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        text = "▣",
+                        color = VaultGold,
+                        fontSize = 40.sp
+                    )
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    Text(
+                        text = "No ${selectedCategory.lowercase()} yet",
+                        color = VaultWhite,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 15.sp
+                    )
+
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    Text(
+                        text = "Import media or download a supported file.",
+                        color = VaultMuted,
+                        fontSize = 11.sp
+                    )
+                }
+            }
+
+            else -> {
+                visibleFiles.forEach { file ->
+                    LibraryFileCard(file = file)
+                    Spacer(modifier = Modifier.height(9.dp))
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(25.dp))
+    }
+}
+
+@Composable
+private fun LibraryFileCard(file: VaultFile) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = VaultPanel,
+        shape = RoundedCornerShape(14.dp)
+    ) {
+        Row(
+            modifier = Modifier.padding(14.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = when (getMediaCategory(file.mimeType, file.name)) {
+                    "Videos" -> "▶"
+                    "Music" -> "♫"
+                    "Images" -> "▧"
+                    else -> "▤"
+                },
+                color = VaultGold,
+                fontSize = 23.sp
+            )
+
+            Spacer(modifier = Modifier.size(12.dp))
+
             Column(
-                horizontalAlignment = Alignment.CenterHorizontally
+                modifier = Modifier.weight(1f)
             ) {
                 Text(
-                    text = "▣",
-                    color = VaultGold,
-                    fontSize = 42.sp
-                )
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                Text(
-                    text = "No ${selectedCategory.lowercase()} displayed yet",
+                    text = file.name,
                     color = VaultWhite,
+                    fontSize = 12.sp,
                     fontWeight = FontWeight.SemiBold,
-                    fontSize = 16.sp
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
                 )
 
-                Spacer(modifier = Modifier.height(6.dp))
+                Spacer(modifier = Modifier.height(5.dp))
 
                 Text(
-                    text = "Library listing is the next integration step.",
+                    text = formatImportSize(file.sizeBytes),
                     color = VaultMuted,
-                    fontSize = 11.sp
+                    fontSize = 10.sp
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun MessageCard(
+    message: String,
+    isError: Boolean
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = VaultPanel,
+        shape = RoundedCornerShape(14.dp)
+    ) {
+        Text(
+            text = message,
+            modifier = Modifier.padding(14.dp),
+            color = if (isError) VaultSilver else VaultGold,
+            fontSize = 11.sp,
+            lineHeight = 18.sp
+        )
     }
 }
 
@@ -288,6 +454,33 @@ private fun CategoryChip(
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )
+    }
+}
+
+private fun getMediaCategory(
+    mimeType: String?,
+    fileName: String
+): String {
+    val mime = mimeType?.lowercase().orEmpty()
+    val extension = fileName.substringAfterLast(
+        ".",
+        ""
+    ).lowercase()
+
+    return when {
+        mime.startsWith("video/") ||
+            extension in setOf("mp4", "mkv", "webm", "mov", "avi", "3gp") ->
+            "Videos"
+
+        mime.startsWith("audio/") ||
+            extension in setOf("mp3", "m4a", "aac", "wav", "ogg", "flac") ->
+            "Music"
+
+        mime.startsWith("image/") ||
+            extension in setOf("jpg", "jpeg", "png", "webp", "gif", "heic") ->
+            "Images"
+
+        else -> "Files"
     }
 }
 
