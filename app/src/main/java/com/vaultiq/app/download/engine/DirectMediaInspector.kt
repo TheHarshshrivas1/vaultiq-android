@@ -8,6 +8,7 @@ import com.vaultiq.app.core.utils.MediaType
 import com.vaultiq.app.core.utils.MediaTypeDetection
 import com.vaultiq.app.core.utils.MediaTypeDetector
 import com.vaultiq.app.core.utils.SafeDns
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -90,6 +91,8 @@ class DirectMediaInspector(
 
                 inspectWithRangeRequest(url)
 
+            } catch (exception: CancellationException) {
+                throw exception
             } catch (exception: Exception) {
                 VaultResult.Error(
                     exception.message
@@ -103,7 +106,6 @@ class DirectMediaInspector(
     private fun inspectWithRangeRequest(
         url: String
     ): VaultResult<DirectMediaInspection> {
-
         val request = Request.Builder()
             .url(url)
             .get()
@@ -112,7 +114,6 @@ class DirectMediaInspector(
             .build()
 
         return client.newCall(request).execute().use { response ->
-
             if (!response.isSuccessful) {
                 return@use VaultResult.Error(
                     "Range inspection failed with HTTP ${response.code}."
@@ -147,7 +148,6 @@ class DirectMediaInspector(
         response: Response,
         contentLengthOverride: Long? = null
     ): VaultResult<DirectMediaInspection> {
-
         val contentType = response.header("Content-Type")
             ?.substringBefore(";")
             ?.trim()
