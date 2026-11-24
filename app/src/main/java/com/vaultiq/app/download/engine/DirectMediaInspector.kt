@@ -158,17 +158,6 @@ class DirectMediaInspector(
                 ?.toLongOrNull()
                 ?.takeIf { it >= 0L }
 
-        val detectedMedia = MediaTypeDetector.detect(
-            url = url,
-            contentType = contentType
-        )
-
-        val media = MediaTypeDetection(
-            type = detectedMedia.type,
-            mimeType = contentType,
-            extension = detectedMedia.extension
-        )
-
         val fileName = response.header("Content-Disposition")
             ?.let { header ->
                 Regex(
@@ -178,7 +167,24 @@ class DirectMediaInspector(
                     ?.groupValues
                     ?.getOrNull(1)
                     ?.trim()
+                    ?.substringAfterLast("/")
+                    ?.substringAfterLast("\\")
             }
+
+        val detectionUrl = fileName
+            ?.takeIf { it.contains(".") }
+            ?: url
+
+        val detectedMedia = MediaTypeDetector.detect(
+            url = detectionUrl,
+            contentType = contentType
+        )
+
+        val media = MediaTypeDetection(
+            type = detectedMedia.type,
+            mimeType = contentType,
+            extension = detectedMedia.extension
+        )
 
         val inspection = DirectMediaInspection(
             url = url,
