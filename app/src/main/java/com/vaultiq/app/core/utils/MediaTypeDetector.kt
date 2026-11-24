@@ -1,6 +1,7 @@
 
 package com.vaultiq.app.core.utils
 
+import java.net.URI
 import java.util.Locale
 
 enum class MediaType(
@@ -115,11 +116,14 @@ object MediaTypeDetector {
         }
     }
 
-    private fun extractExtension(url: String): String? {
+    private fun extractExtension(value: String): String? {
+        if (value.isBlank()) return null
 
         val path = runCatching {
-            java.net.URI(url).path
-        }.getOrNull() ?: return null
+            URI(value).rawPath
+        }.getOrNull()
+            ?: value.substringBefore("?")
+                .substringBefore("#")
 
         val fileName = path.substringAfterLast("/")
         val extension = fileName
@@ -127,7 +131,11 @@ object MediaTypeDetector {
             .lowercase(Locale.ROOT)
 
         return extension.takeIf {
-            it.isNotBlank() && it.length <= 10
+            it.isNotBlank() &&
+                it.length <= 10 &&
+                it.all { character ->
+                    character.isLetterOrDigit()
+                }
         }
     }
 }
