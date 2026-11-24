@@ -4,8 +4,10 @@ package com.vaultiq.app.library
 import android.content.Context
 import android.net.Uri
 import android.provider.OpenableColumns
+import android.webkit.MimeTypeMap
 import com.vaultiq.app.core.common.VaultResult
 import com.vaultiq.app.download.engine.DownloadDestinationManager
+import com.vaultiq.app.download.engine.DownloadOutput
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
@@ -27,25 +29,12 @@ class MediaImportManager(context: Context) {
 
     suspend fun importMedia(uri: Uri): VaultResult<ImportedMedia> =
         withContext(Dispatchers.IO) {
-            var destination: com.vaultiq.app.download.engine.DownloadOutput? = null
+            var destination: DownloadOutput? = null
 
             try {
                 if (uri.scheme != "content") {
                     return@withContext VaultResult.Error(
                         "Unsupported file location."
-                    )
-                }
-
-                val mimeType = resolver.getType(uri)
-
-                if (
-                    mimeType == null ||
-                    !(mimeType.startsWith("video/") ||
-                      mimeType.startsWith("audio/") ||
-                      mimeType.startsWith("image/"))
-                ) {
-                    return@withContext VaultResult.Error(
-                        "Please select a video, audio, or image file."
                     )
                 }
 
@@ -64,8 +53,41 @@ class MediaImportManager(context: Context) {
                     } else {
                         null
                     }
-                } ?: uri.lastPathSegment?.substringAfterLast("/")
+                } ?: uri.lastPathSegment
+                    ?.substringAfterLast("/")
                     ?: "imported_media"
+
+                val providerMime = resolver.getType(uri)
+                    ?.substringBefore(";")
+                    ?.trim()
+                    ?.lowercase()
+
+                val extension = displayName
+                    .substringAfterLast(".", "")
+                    .lowercase()
+
+                val extensionMime = MimeTypeMap.getSingleton()
+                    .getMimeTypeFromExtension(extension)
+
+                val mimeType = when {
+                    providerMime?.startsWith("video/") == true ||
+                    providerMime?.startsWith("audio/") == true ||
+                    providerMime?.startsWith("image/") == true ->
+                        providerMime
+
+                    extensionMime?.startsWith("video/") == true ||
+                    extensionMime?.startsWith("audio/") == true ||
+                    extensionMime?.startsWith("image/") == true ->
+                        extensionMime
+
+                    else -> null
+                }
+
+                if (mimeType == null) {
+                    return@withContext VaultResult.Error(
+                        "Unsupported media file. Select a video, audio, or image."
+                    )
+                }
 
                 val output = when (
                     val result = destinationManager.createDestination(
@@ -74,7 +96,9 @@ class MediaImportManager(context: Context) {
                     )
                 ) {
                     is VaultResult.Success -> result.data
+
                     is VaultResult.Error -> return@withContext result
+
                     is VaultResult.Loading -> {
                         return@withContext VaultResult.Error(
                             "Storage is not ready."
