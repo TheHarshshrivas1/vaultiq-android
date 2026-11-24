@@ -1,6 +1,8 @@
+
 package com.vaultiq.app.download.worker
 
 import android.content.Context
+import android.os.SystemClock
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
@@ -70,16 +72,21 @@ class DownloadWorker(
         if (!startUpdated) {
             return Result.failure()
         }
-                setProgress(
-            workDataOf(
-                "download_id" to downloadId,
-                "downloaded_bytes" to 0L,
-                "total_bytes" to 0L,
-                "progress_percent" to -1
-            )
-        )
 
         return try {
+            setProgress(
+                workDataOf(
+                    "download_id" to downloadId,
+                    "downloaded_bytes" to 0L,
+                    "total_bytes" to 0L,
+                    "progress_percent" to -1
+                )
+            )
+
+            var lastProgressUpdate = 0L
+            var lastProgressBytes = 0L
+            var hasReportedProgress = false
+
             val result = engine.download(
                 url = url,
 
@@ -95,15 +102,30 @@ class DownloadWorker(
                 },
 
                 onProgress = { progress ->
-                    setProgressAsync(
-                        workDataOf(
-                            "download_id" to downloadId,
-                            "downloaded_bytes" to progress.downloadedBytes,
-                            "total_bytes" to progress.totalBytes,
-                            "progress_percent" to
-                                (progress.percentage ?: -1)
+                    val now = SystemClock.elapsedRealtime()
+
+                    val shouldReport =
+                        !hasReportedProgress ||
+                        now - lastProgressUpdate >= 500L ||
+                        progress.downloadedBytes - lastProgressBytes >=
+                            512L * 1024L
+
+                    if (shouldReport) {
+                        hasReportedProgress = true
+                        lastProgressUpdate = now
+                        lastProgressBytes = progress.downloadedBytes
+
+                        setProgressAsync(
+                            workDataOf(
+                                "download_id" to downloadId,
+                                "downloaded_bytes" to
+                                    progress.downloadedBytes,
+                                "total_bytes" to progress.totalBytes,
+                                "progress_percent" to
+                                    (progress.percentage ?: -1)
+                            )
                         )
-                    )
+                    }
                 }
             )
 
@@ -128,7 +150,8 @@ class DownloadWorker(
                             workDataOf(
                                 "download_id" to downloadId,
                                 "completed" to true,
-                                "file_uri" to summary.destinationUri.toString()
+                                "file_uri" to
+                                    summary.destinationUri.toString()
                             )
                         )
                     } else {
@@ -234,6 +257,8 @@ class DownloadWorker(
             is VaultResult.Loading -> return false
         }
 
-        return repository.update(transform(current)) is VaultResult.Success
+        return repository.update(
+            transform(current)
+        ) is VaultResult.Success
     }
 }
