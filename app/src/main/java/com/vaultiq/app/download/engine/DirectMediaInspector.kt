@@ -33,9 +33,9 @@ class DirectMediaInspector(
         .dns(SafeDns)
         .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(10, TimeUnit.SECONDS)
-        .callTimeout(15, TimeUnit.SECONDS)
-        .followRedirects(false)
-        .followSslRedirects(false)
+        .callTimeout(30, TimeUnit.SECONDS)
+        .followRedirects(true)
+        .followSslRedirects(true)
         .build()
 ) {
 
@@ -52,7 +52,7 @@ class DirectMediaInspector(
 
         if (source != MediaSource.DIRECT_WEB) {
             return VaultResult.Error(
-                "This is a ${source.displayName} link, not a confirmed direct media file. Platform-specific support is not available in this inspection step."
+                "This is a ${source.displayName} link. Platform-specific downloading is not available in this inspection step."
             )
         }
 
@@ -64,25 +64,25 @@ class DirectMediaInspector(
                     .header("User-Agent", "VAULTIQ-Android/1.0")
                     .build()
 
-                val headResult = client.newCall(headRequest).execute().use { response ->
-                    when {
-                        response.code == 405 || response.code == 501 -> null
+                val headResult = client.newCall(headRequest)
+                    .execute()
+                    .use { response ->
+                        when (response.code) {
+                            405, 501 -> null
+                            else -> {
+                                if (!response.isSuccessful) {
+                                    return@withContext VaultResult.Error(
+                                        "Server returned HTTP ${response.code} after redirect processing."
+                                    )
+                                }
 
-                        response.code in 300..399 -> {
-                            return@withContext VaultResult.Error(
-                                "The link redirects to another address. Redirect inspection is not supported yet."
-                            )
+                                parseResponse(
+                                    url = response.request.url.toString(),
+                                    response = response
+                                )
+                            }
                         }
-
-                        !response.isSuccessful -> {
-                            return@withContext VaultResult.Error(
-                                "Server returned HTTP ${response.code}."
-                            )
-                        }
-
-                        else -> parseResponse(url, response)
                     }
-                }
 
                 if (headResult != null) {
                     return@withContext headResult
@@ -92,7 +92,8 @@ class DirectMediaInspector(
 
             } catch (exception: Exception) {
                 VaultResult.Error(
-                    exception.message ?: "Unable to inspect this media link.",
+                    exception.message
+                        ?: "Unable to inspect this media link.",
                     exception
                 )
             }
@@ -111,12 +112,6 @@ class DirectMediaInspector(
             .build()
 
         return client.newCall(request).execute().use { response ->
-
-            if (response.code in 300..399) {
-                return@use VaultResult.Error(
-                    "The link redirects to another address. Redirect inspection is not supported yet."
-                )
-            }
 
             if (!response.isSuccessful) {
                 return@use VaultResult.Error(
@@ -140,7 +135,7 @@ class DirectMediaInspector(
             }
 
             parseResponse(
-                url = url,
+                url = response.request.url.toString(),
                 response = response,
                 contentLengthOverride = totalLength
             )
@@ -174,12 +169,16 @@ class DirectMediaInspector(
             extension = detectedMedia.extension
         )
 
-        val fileName = response.header("Content-Disposition")?.let { header ->
-            Regex(
-                """filename\*?=(?:UTF-8''|")?([^";]+)""",
-                RegexOption.IGNORE_CASE
-            ).find(header)?.groupValues?.getOrNull(1)?.trim()
-        }
+        val fileName = response.header("Content-Disposition")
+            ?.let { header ->
+                Regex(
+                    """filename\*?=(?:UTF-8''|")?([^";]+)""",
+                    RegexOption.IGNORE_CASE
+                ).find(header)
+                    ?.groupValues
+                    ?.getOrNull(1)
+                    ?.trim()
+            }
 
         val inspection = DirectMediaInspection(
             url = url,
