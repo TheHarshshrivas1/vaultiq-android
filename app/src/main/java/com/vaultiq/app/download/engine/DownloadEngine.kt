@@ -15,9 +15,9 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import java.io.IOException
+import java.net.URLDecoder
+import java.nio.charset.StandardCharsets
 import java.util.concurrent.TimeUnit
-import java.util.regex.Pattern
 
 data class DownloadProgress(
     val downloadedBytes: Long,
@@ -119,9 +119,12 @@ class DownloadEngine(
                         )
                     }
 
+                    val finalUrlPath =
+                        it.request.url.pathSegments.lastOrNull().orEmpty()
+
                     val fileName = resolveFileName(
                         it.header("Content-Disposition"),
-                        validation.data.path
+                        finalUrlPath
                     )
 
                     val mediaCheck = validateMediaResponse(
@@ -299,16 +302,50 @@ class DownloadEngine(
         urlPath: String
     ): String {
 
-        val headerName = contentDisposition?.let {
-            Pattern.compile(
-                """filename\*?=(?:UTF-8''|")?([^";]+)""",
-                Pattern.CASE_INSENSITIVE
-            ).matcher(it).let { matcher ->
-                if (matcher.find()) matcher.group(1) else null
-            }
+        val extendedName = contentDisposition?.let { header ->
+            Regex(
+                """filename\*\s*=\s*([^;]+)""",
+                RegexOption.IGNORE_CASE
+            ).find(header)
+                ?.groupValues
+                ?.getOrNull(1)
+                ?.trim()
+                ?.trim('"', '\'')
+                ?.let { raw ->
+                    val encoded = raw.substringAfter("''", raw)
+
+                    runCatching {
+                        URLDecoder.decode(
+                            encoded.replace("+", "%2B"),
+                            StandardCharsets.UTF_8.name()
+                        )
+                    }.getOrNull()
+                }
         }
 
-        val candidate = headerName
+        val regularName = contentDisposition?.let { header ->
+            val quoted = Regex(
+                """filename\s*=\s*"((?:\\.|[^"])*)"""",
+                RegexOption.IGNORE_CASE
+            ).find(header)
+                ?.groupValues
+                ?.getOrNull(1)
+
+            val unquoted = Regex(
+                """filename\s*=\s*([^;]+)""",
+                RegexOption.IGNORE_CASE
+            ).find(header)
+                ?.groupValues
+                ?.getOrNull(1)
+                ?.trim()
+                ?.trim('"')
+
+            (quoted ?: unquoted)?.replace("\\\"", "\"")
+        }
+
+        val candidate = extendedName
+            ?.takeIf { it.isNotBlank() }
+            ?: regularName?.takeIf { it.isNotBlank() }
             ?: urlPath.substringAfterLast("/")
                 .ifBlank { "download" }
 
