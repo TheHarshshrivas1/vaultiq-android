@@ -3,6 +3,8 @@ package com.vaultiq.app.download.engine
 
 import android.net.Uri
 import com.vaultiq.app.core.common.VaultResult
+import com.vaultiq.app.core.utils.MediaType
+import com.vaultiq.app.core.utils.MediaTypeDetector
 import com.vaultiq.app.core.utils.SafeDns
 import com.vaultiq.app.core.utils.UrlValidator
 import kotlinx.coroutines.CancellationException
@@ -13,6 +15,7 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import java.io.IOException
 import java.util.concurrent.TimeUnit
 import java.util.regex.Pattern
 
@@ -44,7 +47,9 @@ class DownloadEngine(
         .connectTimeout(30, TimeUnit.SECONDS)
         .readTimeout(60, TimeUnit.SECONDS)
         .writeTimeout(30, TimeUnit.SECONDS)
+        .callTimeout(0, TimeUnit.MILLISECONDS)
         .followRedirects(true)
+        .followSslRedirects(true)
         .build()
 ) {
 
@@ -69,7 +74,7 @@ class DownloadEngine(
         return withContext(Dispatchers.IO) {
 
             val request = Request.Builder()
-                .url(validation.data.toString())
+                .url(validation.data.toASCIIString())
                 .get()
                 .header("User-Agent", "VAULTIQ-Android/1.0")
                 .build()
@@ -78,9 +83,7 @@ class DownloadEngine(
             val job = currentCoroutineContext()[Job]
 
             val cancellationHandle = job?.invokeOnCompletion { cause ->
-                if (cause != null) {
-                    call.cancel()
-                }
+                if (cause != null) call.cancel()
             }
 
             var createdOutput: DownloadOutput? = null
@@ -105,16 +108,8 @@ class DownloadEngine(
                     val mimeType = body.contentType()
                         ?.toString()
                         ?.substringBefore(";")
+                        ?.trim()
                         ?.lowercase()
-
-                    if (
-                        mimeType == "text/html" ||
-                        mimeType == "application/json"
-                    ) {
-                        return@withContext VaultResult.Error(
-                            "The URL did not return a downloadable media file."
-                        )
-                    }
 
                     val totalBytes = body.contentLength()
 
@@ -128,6 +123,15 @@ class DownloadEngine(
                         it.header("Content-Disposition"),
                         validation.data.path
                     )
+
+                    val mediaCheck = validateMediaResponse(
+                        fileName = fileName,
+                        mimeType = mimeType
+                    )
+
+                    if (mediaCheck !is VaultResult.Success) {
+                        return@withContext mediaCheck
+                    }
 
                     val destinationResult = destinationFactory(
                         fileName,
@@ -158,17 +162,13 @@ class DownloadEngine(
                         val buffer = ByteArray(64 * 1024)
 
                         while (true) {
-
                             currentCoroutineContext().ensureActive()
 
                             val bytesRead = input.read(buffer)
 
-                            if (bytesRead == -1) {
-                                break
-                            }
+                            if (bytesRead == -1) break
 
                             stream.write(buffer, 0, bytesRead)
-
                             downloadedBytes += bytesRead
 
                             onProgress(
@@ -230,7 +230,6 @@ class DownloadEngine(
 
                 if (!completed) {
                     createdOutput?.let { output ->
-
                         runCatching {
                             output.outputStream.close()
                         }
@@ -242,6 +241,57 @@ class DownloadEngine(
                 }
             }
         }
+    }
+
+    private fun validateMediaResponse(
+        fileName: String,
+        mimeType: String?
+    ): VaultResult<Unit> {
+
+        if (
+            mimeType == "text/html" ||
+            mimeType == "application/json" ||
+            mimeType == "text/json" ||
+            mimeType == "application/xml" ||
+            mimeType == "text/xml"
+        ) {
+            return VaultResult.Error(
+                "The server returned a webpage or data response, not a media file."
+            )
+        }
+
+        val detected = MediaTypeDetector.detect(
+            url = fileName,
+            contentType = mimeType
+        )
+
+        if (
+            detected.type == MediaType.UNKNOWN ||
+            detected.type == MediaType.WEB_PAGE
+        ) {
+            return VaultResult.Error(
+                "Unsupported or unrecognized file format."
+            )
+        }
+
+        val genericMime = mimeType == null ||
+            mimeType == "application/octet-stream" ||
+            mimeType == "binary/octet-stream"
+
+        if (!genericMime) {
+            val mimeDetection = MediaTypeDetector.detect(
+                url = "",
+                contentType = mimeType
+            )
+
+            if (mimeDetection.type == MediaType.UNKNOWN) {
+                return VaultResult.Error(
+                    "The server returned an unsupported content type."
+                )
+            }
+        }
+
+        return VaultResult.Success(Unit)
     }
 
     private fun resolveFileName(
