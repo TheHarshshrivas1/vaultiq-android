@@ -148,10 +148,18 @@ class DirectMediaInspector(
         response: Response,
         contentLengthOverride: Long? = null
     ): VaultResult<DirectMediaInspection> {
-        val contentType = response.header("Content-Type")
-            ?.substringBefore(";")
-            ?.trim()
-            ?.takeIf { it.isNotBlank() }
+        if (
+    contentType == "text/html" ||
+    contentType == "application/xhtml+xml" ||
+    contentType == "application/json" ||
+    contentType == "text/json" ||
+    contentType == "application/xml" ||
+    contentType == "text/xml"
+) {
+    return VaultResult.Error(
+        "The server returned a webpage or data response, not a media file."
+    )
+        }
 
         val contentLength = contentLengthOverride
             ?: response.header("Content-Length")
