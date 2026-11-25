@@ -47,10 +47,10 @@ class DownloadWorker(
             return Result.failure()
         }
 
-        val recordResult = repository.getById(downloadId)
-
-        val record = when (recordResult) {
-            is VaultResult.Success -> recordResult.data
+        val record = when (
+            val result = repository.getById(downloadId)
+        ) {
+            is VaultResult.Success -> result.data
             is VaultResult.Error -> return Result.failure()
             is VaultResult.Loading -> return Result.failure()
         }
@@ -59,17 +59,16 @@ class DownloadWorker(
             return Result.failure()
         }
 
-        val startUpdated = updateRecord(downloadId) {
-            it.copy(
-                status = DownloadStatus.RUNNING.name,
-                errorMessage = null,
-                downloadedBytes = 0L,
-                totalBytes = 0L,
-                filePath = null
-            )
-        }
-
-        if (!startUpdated) {
+        if (!updateRecord(downloadId) {
+                it.copy(
+                    status = DownloadStatus.RUNNING.name,
+                    errorMessage = null,
+                    downloadedBytes = 0L,
+                    totalBytes = 0L,
+                    filePath = null
+                )
+            }
+        ) {
             return Result.failure()
         }
 
@@ -89,18 +88,15 @@ class DownloadWorker(
 
             val result = engine.download(
                 url = url,
-
                 destinationFactory = { fileName, mimeType ->
                     destinationManager.createDestination(
                         fileName = fileName,
                         mimeType = mimeType
                     )
                 },
-
                 cleanupDestination = { uri ->
                     destinationManager.deleteDestination(uri)
                 },
-
                 onProgress = { progress ->
                     val now = SystemClock.elapsedRealtime()
 
@@ -175,11 +171,9 @@ class DownloadWorker(
                 }
 
                 is VaultResult.Error -> {
-                    val canRetry =
-                        result.cause is IOException &&
-                            runAttemptCount < 3
+                    val retryable = isRetryableError(result)
 
-                    if (canRetry) {
+                    if (retryable && runAttemptCount < MAX_RETRIES) {
                         updateRecord(downloadId) {
                             it.copy(
                                 status = DownloadStatus.QUEUED.name,
@@ -210,6 +204,9 @@ class DownloadWorker(
                     updateRecord(downloadId) {
                         it.copy(
                             status = DownloadStatus.FAILED.name,
+                            downloadedBytes = 0L,
+                            totalBytes = 0L,
+                            filePath = null,
                             errorMessage =
                                 "Download could not be completed."
                         )
@@ -233,26 +230,53 @@ class DownloadWorker(
 
             throw exception
         } catch (exception: Exception) {
-            updateRecord(downloadId) {
-                it.copy(
-                    status = DownloadStatus.FAILED.name,
-                    errorMessage = exception.message
-                        ?: "Unexpected download error."
-                )
+            withContext(NonCancellable) {
+                updateRecord(downloadId) {
+                    it.copy(
+                        status = DownloadStatus.FAILED.name,
+                        downloadedBytes = 0L,
+                        totalBytes = 0L,
+                        filePath = null,
+                        errorMessage = exception.message
+                            ?: "Unexpected download error."
+                    )
+                }
             }
 
             Result.failure()
         }
     }
 
+    private fun isRetryableError(
+        error: VaultResult.Error
+    ): Boolean {
+        if (error.cause is IOException) {
+            return true
+        }
+
+        val httpCode = Regex(
+            """HTTP\s+(\d{3})""",
+            RegexOption.IGNORE_CASE
+        )
+            .find(error.message)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?.toIntOrNull()
+
+        return httpCode == 408 ||
+            httpCode == 425 ||
+            httpCode == 429 ||
+            httpCode in 500..599
+    }
+
     private suspend fun updateRecord(
         downloadId: Long,
         transform: (DownloadEntity) -> DownloadEntity
     ): Boolean {
-        val currentResult = repository.getById(downloadId)
-
-        val current = when (currentResult) {
-            is VaultResult.Success -> currentResult.data
+        val current = when (
+            val result = repository.getById(downloadId)
+        ) {
+            is VaultResult.Success -> result.data
             is VaultResult.Error -> return false
             is VaultResult.Loading -> return false
         }
@@ -260,5 +284,9 @@ class DownloadWorker(
         return repository.update(
             transform(current)
         ) is VaultResult.Success
+    }
+
+    companion object {
+        private const val MAX_RETRIES = 3
     }
 }
