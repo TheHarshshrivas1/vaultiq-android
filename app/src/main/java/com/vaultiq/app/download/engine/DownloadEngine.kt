@@ -17,6 +17,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.net.URLDecoder
 import java.nio.charset.StandardCharsets
+import java.util.Locale
 import java.util.concurrent.TimeUnit
 
 data class DownloadProgress(
@@ -24,8 +25,8 @@ data class DownloadProgress(
     val totalBytes: Long
 ) {
     val percentage: Int?
-        get() = if (totalBytes > 0) {
-            ((downloadedBytes * 100) / totalBytes)
+        get() = if (totalBytes > 0L) {
+            ((downloadedBytes * 100L) / totalBytes)
                 .toInt()
                 .coerceIn(0, 100)
         } else {
@@ -67,14 +68,27 @@ class DownloadEngine(
 
         val validation = UrlValidator.validate(url)
 
-        if (validation !is VaultResult.Success) {
-            return VaultResult.Error("Invalid download URL.")
+        val validUri = when (validation) {
+            is VaultResult.Success -> validation.data
+
+            is VaultResult.Error -> {
+                return VaultResult.Error(
+                    validation.message,
+                    validation.cause
+                )
+            }
+
+            is VaultResult.Loading -> {
+                return VaultResult.Error(
+                    "URL validation is still in progress."
+                )
+            }
         }
 
         return withContext(Dispatchers.IO) {
 
             val request = Request.Builder()
-                .url(validation.data.toASCIIString())
+                .url(validUri.toASCIIString())
                 .get()
                 .header("User-Agent", "VAULTIQ-Android/1.0")
                 .build()
@@ -83,7 +97,9 @@ class DownloadEngine(
             val job = currentCoroutineContext()[Job]
 
             val cancellationHandle = job?.invokeOnCompletion { cause ->
-                if (cause != null) call.cancel()
+                if (cause != null) {
+                    call.cancel()
+                }
             }
 
             var createdOutput: DownloadOutput? = null
@@ -92,16 +108,16 @@ class DownloadEngine(
             try {
                 val response = call.execute()
 
-                response.use {
+                response.use { response ->
 
-                    if (!it.isSuccessful) {
-                        return@withContext VaultResult.Error(
-                            "Server returned HTTP ${it.code}."
+                    if (!response.isSuccessful) {
+                        return@use VaultResult.Error(
+                            "Server returned HTTP ${response.code}."
                         )
                     }
 
-                    val body = it.body
-                        ?: return@withContext VaultResult.Error(
+                    val body = response.body
+                        ?: return@use VaultResult.Error(
                             "Server returned an empty response body."
                         )
 
@@ -109,22 +125,25 @@ class DownloadEngine(
                         ?.toString()
                         ?.substringBefore(";")
                         ?.trim()
-                        ?.lowercase()
+                        ?.lowercase(Locale.ROOT)
+                        ?.takeIf { it.isNotBlank() }
 
                     val totalBytes = body.contentLength()
 
                     if (totalBytes == 0L) {
-                        return@withContext VaultResult.Error(
+                        return@use VaultResult.Error(
                             "The server returned an empty file."
                         )
                     }
 
                     val finalUrlPath =
-                        it.request.url.pathSegments.lastOrNull().orEmpty()
+                        response.request.url.encodedPath
+                            .substringAfterLast("/")
 
                     val fileName = resolveFileName(
-                        it.header("Content-Disposition"),
-                        finalUrlPath
+                        contentDisposition =
+                            response.header("Content-Disposition"),
+                        urlPath = finalUrlPath
                     )
 
                     val mediaCheck = validateMediaResponse(
@@ -132,34 +151,35 @@ class DownloadEngine(
                         mimeType = mimeType
                     )
 
-                  if (mediaCheck is VaultResult.Error) {
-    return@withContext VaultResult.Error(
-        mediaCheck.message,
-        mediaCheck.cause
-    )
-}
+                    if (mediaCheck is VaultResult.Error) {
+                        return@use VaultResult.Error(
+                            mediaCheck.message,
+                            mediaCheck.cause
+                        )
+                    }
 
-if (mediaCheck !is VaultResult.Success) {
-    return@withContext VaultResult.Error(
-        "Unable to validate the media response."
-    )
-}
+                    if (mediaCheck !is VaultResult.Success) {
+                        return@use VaultResult.Error(
+                            "Unable to validate the media response."
+                        )
+                    }
 
-                  
                     val destinationResult = destinationFactory(
                         fileName,
                         mimeType
                     )
 
                     val output = when (destinationResult) {
-                        is VaultResult.Success -> destinationResult.data
+                        is VaultResult.Success -> {
+                            destinationResult.data
+                        }
 
                         is VaultResult.Error -> {
-                            return@withContext destinationResult
+                            return@use destinationResult
                         }
 
                         is VaultResult.Loading -> {
-                            return@withContext VaultResult.Error(
+                            return@use VaultResult.Error(
                                 "Download destination is unavailable."
                             )
                         }
@@ -179,15 +199,20 @@ if (mediaCheck !is VaultResult.Success) {
 
                             val bytesRead = input.read(buffer)
 
-                            if (bytesRead == -1) break
+                            if (bytesRead == -1) {
+                                break
+                            }
 
                             stream.write(buffer, 0, bytesRead)
+
                             downloadedBytes += bytesRead
 
                             onProgress(
                                 DownloadProgress(
                                     downloadedBytes = downloadedBytes,
                                     totalBytes = totalBytes
+                                        .takeIf { it > 0L }
+                                        ?: 0L
                                 )
                             )
                         }
@@ -196,19 +221,21 @@ if (mediaCheck !is VaultResult.Success) {
                     }
 
                     if (
-                        totalBytes > 0 &&
+                        totalBytes > 0L &&
                         downloadedBytes != totalBytes
                     ) {
-                        return@withContext VaultResult.Error(
+                        return@use VaultResult.Error(
                             "Downloaded file size does not match the server response."
                         )
                     }
 
                     if (downloadedBytes <= 0L) {
-                        return@withContext VaultResult.Error(
+                        return@use VaultResult.Error(
                             "The downloaded file is empty."
                         )
                     }
+
+                    currentCoroutineContext().ensureActive()
 
                     completed = true
 
@@ -217,7 +244,7 @@ if (mediaCheck !is VaultResult.Success) {
                             fileName = output.fileName,
                             mimeType = mimeType,
                             bytesDownloaded = downloadedBytes,
-                            totalBytes = if (totalBytes > 0) {
+                            totalBytes = if (totalBytes > 0L) {
                                 totalBytes
                             } else {
                                 downloadedBytes
@@ -243,6 +270,7 @@ if (mediaCheck !is VaultResult.Success) {
 
                 if (!completed) {
                     createdOutput?.let { output ->
+
                         runCatching {
                             output.outputStream.close()
                         }
@@ -261,43 +289,56 @@ if (mediaCheck !is VaultResult.Success) {
         mimeType: String?
     ): VaultResult<Unit> {
 
+        val normalizedMime = mimeType
+            ?.substringBefore(";")
+            ?.trim()
+            ?.lowercase(Locale.ROOT)
+
         if (
-            mimeType == "text/html" ||
-            mimeType == "application/json" ||
-            mimeType == "text/json" ||
-            mimeType == "application/xml" ||
-            mimeType == "text/xml"
+            normalizedMime == "text/html" ||
+            normalizedMime == "application/xhtml+xml" ||
+            normalizedMime == "application/json" ||
+            normalizedMime == "text/json" ||
+            normalizedMime == "application/xml" ||
+            normalizedMime == "text/xml" ||
+            normalizedMime?.startsWith("text/") == true
         ) {
             return VaultResult.Error(
-                "The server returned a webpage or data response, not a media file."
+                "The server returned a webpage or text response, not a media file."
             )
         }
+
+        val genericMime = normalizedMime == null ||
+            normalizedMime == "application/octet-stream" ||
+            normalizedMime == "binary/octet-stream"
 
         val detected = MediaTypeDetector.detect(
             url = fileName,
-            contentType = mimeType
+            contentType = normalizedMime
         )
 
-        if (
-            detected.type == MediaType.UNKNOWN ||
-            detected.type == MediaType.WEB_PAGE
-        ) {
+        val supportedMedia = detected.type == MediaType.VIDEO ||
+            detected.type == MediaType.AUDIO ||
+            detected.type == MediaType.IMAGE
+
+        if (!supportedMedia) {
             return VaultResult.Error(
-                "Unsupported or unrecognized file format."
+                "Only video, audio and image files are supported."
             )
         }
-
-        val genericMime = mimeType == null ||
-            mimeType == "application/octet-stream" ||
-            mimeType == "binary/octet-stream"
 
         if (!genericMime) {
             val mimeDetection = MediaTypeDetector.detect(
                 url = "",
-                contentType = mimeType
+                contentType = normalizedMime
             )
 
-            if (mimeDetection.type == MediaType.UNKNOWN) {
+            val supportedMime =
+                mimeDetection.type == MediaType.VIDEO ||
+                    mimeDetection.type == MediaType.AUDIO ||
+                    mimeDetection.type == MediaType.IMAGE
+
+            if (!supportedMime) {
                 return VaultResult.Error(
                     "The server returned an unsupported content type."
                 )
@@ -313,6 +354,7 @@ if (mediaCheck !is VaultResult.Success) {
     ): String {
 
         val extendedName = contentDisposition?.let { header ->
+
             Regex(
                 """filename\*\s*=\s*([^;]+)""",
                 RegexOption.IGNORE_CASE
@@ -322,6 +364,7 @@ if (mediaCheck !is VaultResult.Success) {
                 ?.trim()
                 ?.trim('"', '\'')
                 ?.let { raw ->
+
                     val encoded = raw.substringAfter("''", raw)
 
                     runCatching {
@@ -334,6 +377,7 @@ if (mediaCheck !is VaultResult.Success) {
         }
 
         val regularName = contentDisposition?.let { header ->
+
             val quoted = Regex(
                 """filename\s*=\s*"((?:\\.|[^"])*)"""",
                 RegexOption.IGNORE_CASE
@@ -350,14 +394,22 @@ if (mediaCheck !is VaultResult.Success) {
                 ?.trim()
                 ?.trim('"')
 
-            (quoted ?: unquoted)?.replace("\\\"", "\"")
+            (quoted ?: unquoted)
+                ?.replace("\\\"", "\"")
         }
+
+        val decodedUrlName = runCatching {
+            URLDecoder.decode(
+                urlPath.replace("+", "%2B"),
+                StandardCharsets.UTF_8.name()
+            )
+        }.getOrNull()
 
         val candidate = extendedName
             ?.takeIf { it.isNotBlank() }
             ?: regularName?.takeIf { it.isNotBlank() }
-            ?: urlPath.substringAfterLast("/")
-                .ifBlank { "download" }
+            ?: decodedUrlName?.takeIf { it.isNotBlank() }
+            ?: "download"
 
         val safeName = candidate
             .substringAfterLast("/")
@@ -369,6 +421,8 @@ if (mediaCheck !is VaultResult.Success) {
             .trim()
             .take(180)
 
-        return safeName.ifBlank { "download" }
+        return safeName.ifBlank {
+            "download"
+        }
     }
 }
