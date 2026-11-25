@@ -25,8 +25,9 @@ data class DirectMediaInspection(
     val fileName: String?
 ) {
     val isMediaFile: Boolean
-        get() = media.type != MediaType.UNKNOWN &&
-            media.type != MediaType.WEB_PAGE
+        get() = media.type == MediaType.VIDEO ||
+            media.type == MediaType.AUDIO ||
+            media.type == MediaType.IMAGE
 }
 
 class DirectMediaInspector(
@@ -45,10 +46,14 @@ class DirectMediaInspector(
 
         val source = when (sourceResult) {
             is VaultResult.Success -> sourceResult.data.source
-            is VaultResult.Error -> return VaultResult.Error(sourceResult.message)
-            is VaultResult.Loading -> return VaultResult.Error(
-                "Unable to validate the shared URL."
-            )
+            is VaultResult.Error -> {
+                return VaultResult.Error(sourceResult.message)
+            }
+            is VaultResult.Loading -> {
+                return VaultResult.Error(
+                    "Unable to validate the shared URL."
+                )
+            }
         }
 
         if (source != MediaSource.DIRECT_WEB) {
@@ -70,6 +75,7 @@ class DirectMediaInspector(
                     .use { response ->
                         when (response.code) {
                             405, 501 -> null
+
                             else -> {
                                 if (!response.isSuccessful) {
                                     return@withContext VaultResult.Error(
@@ -148,17 +154,24 @@ class DirectMediaInspector(
         response: Response,
         contentLengthOverride: Long? = null
     ): VaultResult<DirectMediaInspection> {
+
+        val contentType = response.header("Content-Type")
+            ?.substringBefore(";")
+            ?.trim()
+            ?.lowercase()
+            ?.takeIf { it.isNotBlank() }
+
         if (
-    contentType == "text/html" ||
-    contentType == "application/xhtml+xml" ||
-    contentType == "application/json" ||
-    contentType == "text/json" ||
-    contentType == "application/xml" ||
-    contentType == "text/xml"
-) {
-    return VaultResult.Error(
-        "The server returned a webpage or data response, not a media file."
-    )
+            contentType == "text/html" ||
+            contentType == "application/xhtml+xml" ||
+            contentType == "application/json" ||
+            contentType == "text/json" ||
+            contentType == "application/xml" ||
+            contentType == "text/xml"
+        ) {
+            return VaultResult.Error(
+                "The server returned a webpage or data response, not a media file."
+            )
         }
 
         val contentLength = contentLengthOverride
@@ -207,7 +220,7 @@ class DirectMediaInspector(
             VaultResult.Success(inspection)
         } else {
             VaultResult.Error(
-                "The server did not confirm a supported media or document file."
+                "The server did not confirm a supported media file."
             )
         }
     }
