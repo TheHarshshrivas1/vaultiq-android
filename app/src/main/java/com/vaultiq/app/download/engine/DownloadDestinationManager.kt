@@ -183,27 +183,30 @@ class DownloadDestinationManager(context: Context) {
                 documentId
             )
 
-        val existingNames = resolver.query(
-            childrenUri,
-            arrayOf(DocumentsContract.Document.COLUMN_DISPLAY_NAME),
-            null,
-            null,
-            null
-        )?.use { cursor ->
-            buildSet {
-                val nameColumn = cursor.getColumnIndex(
-                    DocumentsContract.Document.COLUMN_DISPLAY_NAME
-                )
+        val existingNames: Set<String> = resolver.query(
+    childrenUri,
+    arrayOf(DocumentsContract.Document.COLUMN_DISPLAY_NAME),
+    null,
+    null,
+    null
+)?.use { cursor ->
+    buildSet<String> {
+        val nameColumn = cursor.getColumnIndex(
+            DocumentsContract.Document.COLUMN_DISPLAY_NAME
+        )
 
-                if (nameColumn >= 0) {
-                    while (cursor.moveToNext()) {
-                        cursor.getString(nameColumn)?.let(::add)
-                    }
+        if (nameColumn >= 0) {
+            while (cursor.moveToNext()) {
+                val existingName = cursor.getString(nameColumn)
+                if (existingName != null) {
+                    add(existingName)
                 }
             }
-        } ?: return VaultResult.Error(
-            "Unable to check existing files in the selected folder."
-        )
+        }
+    }
+} ?: return VaultResult.Error(
+    "Unable to check existing files in the selected folder."
+)
 
         val uniqueName = findUniqueName(fileName) {
             it in existingNames
