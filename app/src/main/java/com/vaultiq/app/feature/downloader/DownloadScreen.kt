@@ -201,29 +201,36 @@ fun DownloadScreen(
 
                     if (readyUrl != null && !isSubmitting) {
                         scope.launch {
-                            isSubmitting = true
-                            downloadMessage = null
+    isSubmitting = true
+    downloadMessage = null
 
-                            when (
-                                val result = DownloadRequestManager(context)
-                                    .submit(readyUrl)
-                            ) {
-                                is VaultResult.Success -> {
-                                    downloadMessage =
-                                        "Added to download queue. ID: ${result.data}"
-                                }
+    try {
+        when (
+            val result = DownloadRequestManager(context)
+                .submit(readyUrl)
+        ) {
+            is VaultResult.Success -> {
+                downloadMessage =
+                    "Added to download queue. ID: ${result.data}"
+            }
 
-                                is VaultResult.Error -> {
-                                    downloadMessage = result.message
-                                }
+            is VaultResult.Error -> {
+                downloadMessage = result.message
+            }
 
-                                is VaultResult.Loading -> {
-                                    downloadMessage =
-                                        "Please try adding the download again."
-                                }
-                            }
-
-                            isSubmitting = false
+            is VaultResult.Loading -> {
+                downloadMessage =
+                    "Please try adding the download again."
+            }
+        }
+    } catch (exception: kotlinx.coroutines.CancellationException) {
+        throw exception
+    } catch (exception: Exception) {
+        downloadMessage =
+            exception.message ?: "Unable to start download."
+    } finally {
+        isSubmitting = false
+    }
                         }
                     }
                 },
