@@ -39,6 +39,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.vaultiq.app.core.common.VaultResult
+import com.vaultiq.app.library.VaultFile
+import com.vaultiq.app.library.LibraryManager
+import com.vaultiq.app.library.MediaImportManager
 import com.vaultiq.app.ui.theme.VaultGold
 import com.vaultiq.app.ui.theme.VaultMuted
 import com.vaultiq.app.ui.theme.VaultNavy
