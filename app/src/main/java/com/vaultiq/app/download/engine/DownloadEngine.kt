@@ -132,10 +132,20 @@ class DownloadEngine(
                         mimeType = mimeType
                     )
 
-                    if (mediaCheck !is VaultResult.Success) {
-                        return@withContext mediaCheck
-                    }
+                  if (mediaCheck is VaultResult.Error) {
+    return@withContext VaultResult.Error(
+        mediaCheck.message,
+        mediaCheck.cause
+    )
+}
 
+if (mediaCheck !is VaultResult.Success) {
+    return@withContext VaultResult.Error(
+        "Unable to validate the media response."
+    )
+}
+
+                  
                     val destinationResult = destinationFactory(
                         fileName,
                         mimeType
