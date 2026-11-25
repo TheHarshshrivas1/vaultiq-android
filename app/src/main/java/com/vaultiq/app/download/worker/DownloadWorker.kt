@@ -266,7 +266,7 @@ class DownloadWorker(
         return httpCode == 408 ||
             httpCode == 425 ||
             httpCode == 429 ||
-            httpCode in 500..599
+            (httpCode != null && httpCode in 500..599)
     }
 
     private suspend fun updateRecord(
