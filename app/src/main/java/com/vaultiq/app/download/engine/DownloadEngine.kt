@@ -2,6 +2,7 @@
 package com.vaultiq.app.download.engine
 
 import android.net.Uri
+import android.webkit.MimeTypeMap
 import com.vaultiq.app.core.common.VaultResult
 import com.vaultiq.app.core.utils.MediaType
 import com.vaultiq.app.core.utils.MediaTypeDetector
@@ -112,7 +113,7 @@ class DownloadEngine(
 
                     if (!response.isSuccessful) {
                         return@use VaultResult.Error(
-                            "Server returned HTTP ${response.code}."
+                            "Media server returned HTTP ${response.code}."
                         )
                     }
 
@@ -140,14 +141,15 @@ class DownloadEngine(
                         response.request.url.encodedPath
                             .substringAfterLast("/")
 
-                    val fileName = resolveFileName(
+                    val resolvedName = resolveFileName(
                         contentDisposition =
                             response.header("Content-Disposition"),
-                        urlPath = finalUrlPath
+                        urlPath = finalUrlPath,
+                        mimeType = mimeType
                     )
 
                     val mediaCheck = validateMediaResponse(
-                        fileName = fileName,
+                        fileName = resolvedName,
                         mimeType = mimeType
                     )
 
@@ -165,7 +167,7 @@ class DownloadEngine(
                     }
 
                     val destinationResult = destinationFactory(
-                        fileName,
+                        resolvedName,
                         mimeType
                     )
 
@@ -175,7 +177,10 @@ class DownloadEngine(
                         }
 
                         is VaultResult.Error -> {
-                            return@use destinationResult
+                            return@use VaultResult.Error(
+                                destinationResult.message,
+                                destinationResult.cause
+                            )
                         }
 
                         is VaultResult.Loading -> {
@@ -308,41 +313,20 @@ class DownloadEngine(
             )
         }
 
-        val genericMime = normalizedMime == null ||
-            normalizedMime == "application/octet-stream" ||
-            normalizedMime == "binary/octet-stream"
-
         val detected = MediaTypeDetector.detect(
             url = fileName,
             contentType = normalizedMime
         )
 
-        val supportedMedia = detected.type == MediaType.VIDEO ||
-            detected.type == MediaType.AUDIO ||
-            detected.type == MediaType.IMAGE
+        val supportedMedia =
+            detected.type == MediaType.VIDEO ||
+                detected.type == MediaType.AUDIO ||
+                detected.type == MediaType.IMAGE
 
         if (!supportedMedia) {
             return VaultResult.Error(
-                "Only video, audio and image files are supported."
+                "Only supported video, audio and image files can be downloaded."
             )
-        }
-
-        if (!genericMime) {
-            val mimeDetection = MediaTypeDetector.detect(
-                url = "",
-                contentType = normalizedMime
-            )
-
-            val supportedMime =
-                mimeDetection.type == MediaType.VIDEO ||
-                    mimeDetection.type == MediaType.AUDIO ||
-                    mimeDetection.type == MediaType.IMAGE
-
-            if (!supportedMime) {
-                return VaultResult.Error(
-                    "The server returned an unsupported content type."
-                )
-            }
         }
 
         return VaultResult.Success(Unit)
@@ -350,7 +334,8 @@ class DownloadEngine(
 
     private fun resolveFileName(
         contentDisposition: String?,
-        urlPath: String
+        urlPath: String,
+        mimeType: String?
     ): String {
 
         val extendedName = contentDisposition?.let { header ->
@@ -420,9 +405,51 @@ class DownloadEngine(
             )
             .trim()
             .take(180)
+            .ifBlank { "download" }
 
-        return safeName.ifBlank {
-            "download"
+        return addMissingExtension(
+            fileName = safeName,
+            mimeType = mimeType
+        )
+    }
+
+    private fun addMissingExtension(
+        fileName: String,
+        mimeType: String?
+    ): String {
+
+        if (fileName.substringAfterLast("/").contains(".")) {
+            return fileName
+        }
+
+        val extension = mimeType
+            ?.let {
+                MimeTypeMap.getSingleton()
+                    .getExtensionFromMimeType(it)
+            }
+            ?.takeIf { it.isNotBlank() }
+            ?: when (mimeType) {
+                "video/mp4" -> "mp4"
+                "video/webm" -> "webm"
+                "video/quicktime" -> "mov"
+                "video/x-matroska" -> "mkv"
+                "audio/mpeg" -> "mp3"
+                "audio/mp4" -> "m4a"
+                "audio/aac" -> "aac"
+                "audio/wav", "audio/x-wav" -> "wav"
+                "audio/ogg" -> "ogg"
+                "audio/flac" -> "flac"
+                "image/jpeg" -> "jpg"
+                "image/png" -> "png"
+                "image/webp" -> "webp"
+                "image/gif" -> "gif"
+                else -> null
+            }
+
+        return if (extension != null) {
+            "$fileName.$extension"
+        } else {
+            fileName
         }
     }
 }
